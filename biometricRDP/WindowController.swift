@@ -30,6 +30,8 @@ final class WindowController: NSViewController, TestAPIControllerRoutes {
         rootView.onDisconnect = { [weak self] in
             self?.sessionController.disconnect()
         }
+        // Force session controller view load so its /session/* routes register
+        _ = sessionController.view
         TestAPIRouter.shared.register(controller: self)
     }
 
