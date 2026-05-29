@@ -4,6 +4,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
 
     var appController: AppController!
+    var testAPIServer: TestAPIServer?
+    var mockController: MockController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -29,12 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let server = TestAPIServer()
                 try server.start()
+                testAPIServer = server
             } catch {
                 NSLog("Failed to start TestAPIServer: \(error)")
             }
 
-            let mockController = MockController()
-            _ = mockController.view
+            let mc = MockController()
+            _ = mc.view
+            mockController = mc
         }
 
         DispatchQueue.main.async {

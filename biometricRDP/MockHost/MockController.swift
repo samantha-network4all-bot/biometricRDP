@@ -73,9 +73,9 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
                 return .badRequest("invalid body")
             }
             if body.pattern == "solid" {
-                let r = Self.parseHex(body.color, offset: 1)
-                let g = Self.parseHex(body.color, offset: 3)
-                let b = Self.parseHex(body.color, offset: 5)
+                let r = Self.parseHex(body.color, offset: 0)
+                let g = Self.parseHex(body.color, offset: 2)
+                let b = Self.parseHex(body.color, offset: 4)
                 self.mockHost.pushSolid(r: r, g: g, b: b)
             }
             return .ok(json: Data(#"{"ok":true}"#.utf8))

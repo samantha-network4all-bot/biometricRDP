@@ -10,30 +10,47 @@ final class TestAPIServer {
     func start() throws {
         let params = NWParameters.tcp
         listener = try NWListener(using: params, on: .any)
-        listener?.stateUpdateHandler = { state in
-            if case .failed(let err) = state {
-                NSLog("TestAPIServer failed: \(err)")
-            }
-        }
         listener?.newConnectionHandler = { [weak self] conn in
             self?.handle(conn)
         }
+        listener?.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                if let port = self?.listener?.port, port != .any {
+                    self?.writePortFile(port)
+                }
+            case .failed(let err):
+                NSLog("TestAPIServer failed: \(err)")
+            default:
+                break
+            }
+        }
         listener?.start(queue: queue)
 
-        if let port = listener?.port {
+        var attempts = 0
+        while (listener?.port ?? .any) == .any && attempts < 200 {
+            Thread.sleep(forTimeInterval: 0.01)
+            attempts += 1
+        }
+        if let port = listener?.port, port != .any {
             writePortFile(port)
+        } else {
+            NSLog("TestAPIServer: listener did not get a port")
         }
     }
 
     private func writePortFile(_ port: NWEndpoint.Port) {
-        let url = try! FileManager.default.url(for: .applicationSupportDirectory,
-                                                in: .userDomainMask,
-                                                appropriateFor: nil,
-                                                create: true)
+        let url = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask).first!
             .appendingPathComponent("biometricRDP")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         let portFile = url.appendingPathComponent("test-api.port")
-        try? "\(port.rawValue)\n".write(to: portFile, atomically: true, encoding: .utf8)
+        let content = "\(port.rawValue)\n"
+        do {
+            try content.write(to: portFile, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("TestAPIServer: failed to write port file: \(error)")
+        }
     }
 
     private func key(for conn: NWConnection) -> ObjectIdentifier {
@@ -50,21 +67,42 @@ final class TestAPIServer {
 
     private func readNext(_ conn: NWConnection) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            let k = self?.key(for: conn)
+            guard let self = self else { return }
+            let k = self.key(for: conn)
             if let data = data, !data.isEmpty {
-                self?.buffers[k!]?.append(data)
-            }
-            if isComplete || error != nil {
-                if let buffered = self?.buffers[k!], !buffered.isEmpty {
-                    self?.process(data: buffered, conn: conn)
-                } else {
-                    self?.connections.removeValue(forKey: k!)
-                    self?.buffers.removeValue(forKey: k!)
+                if self.buffers[k] != nil {
+                    self.buffers[k]!.append(data)
                 }
+            }
+            if self.hasCompleteRequest(k), let buffered = self.buffers[k], !buffered.isEmpty {
+                self.process(data: buffered, conn: conn)
                 return
             }
-            self?.readNext(conn)
+            if isComplete || error != nil {
+                if let buffered = self.buffers[k], !buffered.isEmpty {
+                    self.process(data: buffered, conn: conn)
+                }
+                self.connections.removeValue(forKey: k)
+                self.buffers.removeValue(forKey: k)
+                return
+            }
+            self.readNext(conn)
         }
+    }
+
+    private func hasCompleteRequest(_ k: ObjectIdentifier) -> Bool {
+        guard let buf = buffers[k], !buf.isEmpty else { return false }
+        guard let text = String(data: buf, encoding: .utf8) else { return false }
+        guard let headerEndRange = text.range(of: "\r\n\r\n") else { return false }
+        let headerEndOffset = text.distance(from: text.startIndex, to: headerEndRange.upperBound)
+        if let clRange = text.range(of: "Content-Length:", options: .caseInsensitive) {
+            let afterCL = text[clRange.upperBound...]
+            let clVal = afterCL.prefix(while: { $0.isNumber })
+            if let cl = Int(clVal) {
+                return buf.count >= headerEndOffset + cl
+            }
+        }
+        return true
     }
 
     private func process(data: Data, conn: NWConnection) {
@@ -132,9 +170,19 @@ struct HTTPRequestParser {
             i += 1
         }
         i += 1
-        let bodyLines = Array(lines[i...])
-        let bodyStr = bodyLines.joined(separator: "\r\n")
-        let body = bodyStr.data(using: .utf8) ?? Data()
+        var contentLength = 0
+        if let clHeader = headers["Content-Length"] {
+            contentLength = Int(clHeader) ?? 0
+        }
+        let headerText = lines[0..<min(i, lines.count)].joined(separator: "\r\n")
+        let headerBytes = headerText.data(using: .utf8)?.count ?? 0
+        let bodyStart = headerBytes + 2
+        let body: Data
+        if contentLength > 0 && data.count >= bodyStart + contentLength {
+            body = data.subdata(in: bodyStart..<(bodyStart + contentLength))
+        } else {
+            body = Data()
+        }
         return HTTPRequest(method: method, path: path, headers: headers, body: body)
     }
 }
