@@ -58,12 +58,20 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
 
         router.post(prefix: Self.routePrefix, path: "/stop") { [weak self] _ in
             guard let self else { return .notFound }
+            guard self.mockHost.isRunning else {
+                let body = try! JSONSerialization.data(withJSONObject: ["error": "not running"])
+                return .ok(json: body)
+            }
             self.mockHost.stop()
             return .ok(json: Data(#"{"ok":true}"#.utf8))
         }
 
         router.post(prefix: Self.routePrefix, path: "/push") { [weak self] req in
             guard let self else { return .notFound }
+            guard self.mockHost.hasClientConnected else {
+                let body = try! JSONSerialization.data(withJSONObject: ["error": "no client connected"])
+                return .ok(json: body)
+            }
             struct PushBody: Decodable {
                 let pattern: String
                 let color: String

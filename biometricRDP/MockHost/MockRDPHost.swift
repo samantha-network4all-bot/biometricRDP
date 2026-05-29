@@ -106,6 +106,14 @@ final class MockRDPHost {
         self.port = p
     }
 
+    var isRunning: Bool {
+        return listener != nil
+    }
+
+    var hasClientConnected: Bool {
+        return connection != nil
+    }
+
     func stop() {
         connection?.cancel()
         connection = nil
