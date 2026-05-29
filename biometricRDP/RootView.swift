@@ -37,7 +37,7 @@ final class RootView: NSView {
         connectButton.title = "Connect"
         connectButton.bezelStyle = .rounded
         connectButton.target = self
-        connectAction(connectButton)
+        connectButton.action = #selector(connectAction)
         connectButton.autoresizingMask = [.maxXMargin, .maxYMargin]
         bar.addSubview(connectButton)
 
