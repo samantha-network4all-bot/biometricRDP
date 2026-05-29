@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("Failed to start TestAPIServer: \(error)")
             }
+
+            let mockController = MockController()
+            _ = mockController.view
         }
 
         DispatchQueue.main.async {
