@@ -81,7 +81,7 @@ final class MockRDPHost {
         self.height = height
         self.bpp = bpp
 
-        let params = NWParameters.tls
+        let params = NWParameters.tcp
 
         listener = try NWListener(using: params, on: .any)
         listener?.stateUpdateHandler = { state in
