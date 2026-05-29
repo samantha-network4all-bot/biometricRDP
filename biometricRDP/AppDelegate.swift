@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                defer: false)
         window.title = "biometricRDP"
         window.contentViewController = wc
+        // Force view load so WindowController.viewDidLoad registers session routes
+        _ = wc.view
         window.makeKeyAndOrderFront(nil)
         wc.rdpWindow = window
 
