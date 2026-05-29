@@ -1,0 +1,108 @@
+# biometricRDP — one slice, one commit
+
+You are implementing **one** GitHub issue against the biometricRDP codebase.
+A fresh agent will replace you each iteration; you cannot rely on
+session memory. Take exactly one shot at making the issue's
+acceptance probes pass.
+
+## Inputs
+
+- **PRD**: `PRD.md` at the repo root. This is the contract. Read it.
+- **Architectural invariants**: `PRD.md` §8. Read these *before*
+  writing code. PRs that violate them are rejected mechanically by
+  the code-quality check.
+- **Lessons learned**: `lessons-learned.md`. Skim §1 (app bugs)
+  before touching Swift; §2 (automation traps) is for the
+  orchestrator, not you.
+- **This issue**:
+  ```
+  {{.IssueTitle}}
+
+  {{.IssueBody}}
+  ```
+- **Acceptance probes** (a JSON block embedded in the issue body):
+  ```
+  {{.AcceptanceJSON}}
+  ```
+  These are the HTTP calls + assertions the feature-test will run.
+  Your code must make every one pass.
+- **Previous attempt failure** (empty on attempt 0):
+  ```
+  {{.PreviousFailure}}
+  ```
+
+## Hard rules
+
+1. **One iteration, one commit.** Resist chaining "while I'm
+   here" fixes. If you spot a second defect, leave it; the next
+   iteration handles it.
+2. **Refuse to start if the tree is dirty.** Run
+   `git status --porcelain`; if any output, write
+   `state.json` with `{"action":"abort","reason":"dirty-tree"}`
+   and exit.
+3. **Never modify**: `PRD.md`, `lessons-learned.md`, `README.md`,
+   `orchestrator/**`, `.gitignore`, `.biometricrdp/**`, this prompt
+   template.
+4. **Never push to a branch other than `main`.** Branch creation
+   is the orchestrator's job for HITL handoff only.
+5. **Test API parity + MVC (PRD §8.9 + §8.14).** If this issue adds a
+   user-visible feature, the owning `NSViewController` MUST register its
+   own routes (an extension conforming to `TestAPIControllerRoutes` in
+   the same file, namespaced `/<prefix>/<action>`) so the feature is
+   reachable from HTTP. Do NOT add routes to a shared routes file and do
+   NOT add top-level routes (only `/healthz`, `/shutdown`, `/screenshot`
+   are top-level). See `.agent/skills/mvc-appkit.md`. If you can't think
+   of how a probe would reach the feature, the issue is mis-specified —
+   record that as the failure reason and exit.
+6. **No `osascript`, `CGEvent`, `AXUIElement` in app code.** Those
+   belong to the obsolete pre-biometricRDP harness. Verification flows
+   exclusively through the HTTP test API.
+7. **`/screenshot` must keep working.** The orchestrator captures a
+   PNG via `GET /screenshot` after every iteration and attaches it
+   to the GitHub issue as visual proof of progress. PRD §7.6 and
+   §8.13 spell out the required implementation
+   (`contentView.bitmapImageRepForCachingDisplay` →
+   `cacheDisplay(in:to:)` → `representation(using: .png)`). If your
+   slice changes the window's view hierarchy or replaces the
+   contentView, update the `/screenshot` handler so it captures the
+   new view. Never reach for `CGWindowListCreateImage` or
+   `screencapture` — those require Screen-Recording permission and
+   will fail silently in CI.
+
+## Workflow
+
+1. Read `PRD.md` and `lessons-learned.md` once, fully.
+2. Read the issue title, body, and acceptance probes.
+3. Locate the relevant Swift files (or create them under
+   `biometricRDP/<area>/`).
+4. Make the minimum change that:
+   - implements the behavior described in the issue body, AND
+   - registers the route(s) on the owning controller (per §8.14) so
+     every probe in the acceptance block has a route that satisfies it.
+5. Build: `xcodegen generate && xcodebuild -scheme biometricRDP -configuration Debug -derivedDataPath build/ build`.
+   - If the build fails, fix the error in the same iteration. The
+     feature-test check refuses to run a non-compiling tree.
+6. Commit on `main`:
+   ```
+   git add -A
+   git commit -m "S{{.IssueNumber}}: <one-line summary>
+
+   <2-3 line WHY referencing the acceptance probe(s) this satisfies>"
+   git push origin main
+   ```
+7. Write `.biometricrdp/state.json`:
+   ```json
+   {"action":"check","issue":{{.IssueNumber}},"commit":"<sha>"}
+   ```
+
+## When to exit with `abort` instead of committing
+
+- Dirty tree on entry (rule 2).
+- The issue body has no `acceptance:` block, or the probes touch
+  endpoints you'd need to invent without PRD backing.
+- Implementing the issue would require breaking a §8 invariant.
+
+In all three cases write `.biometricrdp/state.json` with
+`{"action":"abort","reason":"<slug>","detail":"<one paragraph>"}`
+and exit 0. The orchestrator will surface this as
+`agent-refused-task`, not as a failure.

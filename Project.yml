@@ -1,0 +1,46 @@
+name: biometricRDP
+options:
+  bundleIdPrefix: com.bimboware
+  deploymentTarget:
+    macOS: "13.0"
+  generateEmptyDirectories: true
+configs:
+  Debug: debug
+  Release: release
+targets:
+  biometricRDP:
+    type: application
+    platform: macOS
+    scheme:
+      gatherCoverageData: false
+    sources:
+      - path: biometricRDP
+    settings:
+      base:
+        PRODUCT_NAME: biometricRDP
+        PRODUCT_BUNDLE_IDENTIFIER: com.bimboware.biometricrdp
+        SWIFT_VERSION: "5.9"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ARCHS: "arm64 x86_64"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        INFOPLIST_FILE: biometricRDP/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ""
+    info:
+      path: biometricRDP/Info.plist
+      properties:
+        CFBundleDisplayName: biometricRDP
+        CFBundleIdentifier: com.bimboware.biometricrdp
+        NSMainNibFile: ""
+        NSPrincipalClass: NSApplication
+        LSMinimumSystemVersion: "13.0"
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Plain Text
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Alternate
+            CFBundleTypeExtensions:
+              - txt
+            CFBundleTypeIconFile: ""
+        CFBundleName: biometricRDP
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
