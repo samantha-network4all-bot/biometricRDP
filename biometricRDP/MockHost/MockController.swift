@@ -85,11 +85,9 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
             guard let self else { return .notFound }
             let keys = self.mockHost.lastInputKeys()
             let mouse = self.mockHost.lastInputMouse()
-            let text = self.mockHost.lastInputText()
             let resp: [String: Any] = [
                 "keys": keys,
-                "mouse": mouse,
-                "text": text
+                "mouse": mouse
             ]
             let data = try! JSONSerialization.data(withJSONObject: resp)
             return .ok(json: data)
