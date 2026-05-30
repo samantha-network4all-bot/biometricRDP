@@ -23,7 +23,7 @@ final class MockRDPHost {
 
     // MARK: - Embedded self-signed PKCS#12 identity (base64-encoded, password: "mock")
 
-    private static let mockP12Base64 = "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"
+    private static let mockP12Base64 = "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"
 
     func start(nla: Bool, username: String, password: String,
                width: Int, height: Int, bpp: Int) throws {
@@ -114,67 +114,83 @@ final class MockRDPHost {
         var phase: Phase = .waitingCR
         var buf = Data()
 
+        func tryProcess() -> Bool {
+            switch phase {
+            case .waitingNLA:
+                if let tsReq = self.consumeTSRequest(buf: &buf) {
+                    let (serverChallenge, targetInfo, challengeTS) = self.buildNLAChallenge(from: tsReq)
+                    self.serverChallengeData = serverChallenge
+                    self.targetInfoData = targetInfo
+                    conn.send(content: challengeTS, completion: .contentProcessed { _ in })
+                    phase = .waitingNLAAuth
+                    return true
+                }
+            case .waitingNLAAuth:
+                if let authTSReq = self.consumeTSRequest(buf: &buf) {
+                    let valid = self.validateNLAAuth(authTSReq)
+                    if valid {
+                        let successTS = self.buildNLASuccess()
+                        conn.send(content: successTS, completion: .contentProcessed { _ in })
+                        phase = .waitingMCS
+                    } else {
+                        let failTS = self.buildNLAFailure()
+                        conn.send(content: failTS, completion: .contentProcessed { _ in
+                            conn.cancel()
+                            self.connection = nil
+                        })
+                        return false
+                    }
+                    return true
+                }
+            case .waitingCR:
+                if self.consumeX224CR(buf: &buf) {
+                    let proto: UInt32 = self.nlaEnabled ? 0x01 : 0x00
+                    conn.send(content: self.buildCC(negotiatedProtocol: proto), completion: .contentProcessed { _ in })
+                    if self.nlaEnabled {
+                        phase = .waitingNLA
+                    } else {
+                        phase = .waitingMCS
+                    }
+                    return true
+                }
+            case .waitingMCS:
+                if self.consumeMCSConnect(buf: &buf) {
+                    conn.send(content: self.buildMCSResponse(), completion: .contentProcessed { _ in })
+                    phase = .waitingCaps
+                    return true
+                }
+            case .waitingCaps:
+                if self.consumeCapabilities(buf: &buf) {
+                    conn.send(content: self.buildDemandActive(), completion: .contentProcessed { _ in })
+                    phase = .active
+                    return true
+                }
+            case .active:
+                return false
+            }
+            return false
+        }
+
         func readNext() {
             conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, _ in
                 guard let self else { return }
                 if let d = data, !d.isEmpty { buf.append(d) }
 
-                switch phase {
-                case .waitingNLA:
-                    if let tsReq = self.consumeTSRequest(buf: &buf) {
-                        let (serverChallenge, targetInfo, challengeTS) = self.buildNLAChallenge(from: tsReq)
-                        self.serverChallengeData = serverChallenge
-                        self.targetInfoData = targetInfo
-                        conn.send(content: challengeTS, completion: .contentProcessed { _ in })
-                        phase = .waitingNLAAuth
-                    }
-                case .waitingNLAAuth:
-                    if let authTS = self.consumeTSRequest(buf: &buf) {
-                        let valid = self.validateNLAAuth(authTS)
-                        if valid {
-                            let successTS = self.buildNLASuccess()
-                            conn.send(content: successTS, completion: .contentProcessed { _ in })
-                            phase = .waitingMCS
-                        } else {
-                            let failTS = self.buildNLAFailure()
-                            conn.send(content: failTS, completion: .contentProcessed { _ in
-                                conn.cancel()
-                                self.connection = nil
-                            })
-                            return
-                        }
-                    }
-                case .waitingCR:
-                    if self.consumeX224CR(buf: &buf) {
-                        let proto: UInt32 = self.nlaEnabled ? 0x01 : 0x00
-                        conn.send(content: self.buildCC(negotiatedProtocol: proto), completion: .contentProcessed { _ in })
-                        if self.nlaEnabled {
-                            phase = .waitingNLA
-                        } else {
-                            phase = .waitingMCS
-                        }
-                    }
-                case .waitingMCS:
-                    if self.consumeMCSConnect(buf: &buf) {
-                        conn.send(content: self.buildMCSResponse(), completion: .contentProcessed { _ in })
-                        phase = .waitingCaps
-                    }
-                case .waitingCaps:
-                    if self.consumeCapabilities(buf: &buf) {
-                        conn.send(content: self.buildDemandActive(), completion: .contentProcessed { _ in })
-                        phase = .active
-                    }
-                case .active:
-                    if isComplete { conn.cancel(); self.connection = nil; return }
-                    buf = Data()
-                    readNext()
+                // Loop to process all buffered messages
+                while phase != .active {
+                    if !tryProcess() { break }
+                }
+
+                if phase == .active {
+                    if isComplete { conn.cancel(); self.connection = nil }
                     return
                 }
 
                 if isComplete {
-                    if phase != .active { conn.cancel(); self.connection = nil }
+                    conn.cancel(); self.connection = nil
                     return
                 }
+
                 readNext()
             }
         }
@@ -429,7 +445,7 @@ final class MockRDPHost {
     private func buildCC(negotiatedProtocol: UInt32 = 0) -> Data {
         let x224: [UInt8] = [0xD0, 0x00, 0x00, 0x00, 0x00, 0x00]
         let neg: [UInt8] = [
-            0x02, 0x00,       // TYPE_RDP_NEG_RSP
+            0x02,             // TYPE_RDP_NEG_RSP
             0x00,             // flags
             0x08, 0x00,       // length = 8
             UInt8((negotiatedProtocol >> 24) & 0xFF),

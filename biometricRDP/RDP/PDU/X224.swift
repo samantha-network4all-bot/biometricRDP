@@ -75,7 +75,7 @@ enum X224 {
             if type == 0x02 { // TYPE_RDP_NEG_RSP
                 let protoBytes = data[(offset + 4)..<(offset + 8)]
                 let proto = protoBytes.enumerated().reduce(UInt32(0)) { acc, el in
-                    acc | (UInt32(el.element) << (24 - el.offset * 8))
+                    acc | (UInt32(el.element) << (el.offset * 8))
                 }
                 return proto
             }

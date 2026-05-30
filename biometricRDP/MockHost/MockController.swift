@@ -58,10 +58,6 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
 
         router.post(prefix: Self.routePrefix, path: "/stop") { [weak self] _ in
             guard let self else { return .notFound }
-            guard self.mockHost.isRunning else {
-                let body = try! JSONSerialization.data(withJSONObject: ["error": "not running"])
-                return .ok(json: body)
-            }
             self.mockHost.stop()
             return .ok(json: Data(#"{"ok":true}"#.utf8))
         }
