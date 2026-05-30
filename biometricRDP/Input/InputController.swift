@@ -20,6 +20,54 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
     }
 
     func registerRoutes(on router: TestAPIRouter) {
+        // ---- /input/key (scancode-based) ----
+        router.post(prefix: Self.routePrefix, path: "/key") { [weak self] req in
+            guard let self, let sc = self.sessionController else { return .notFound }
+            guard let session = sc.rdpSession,
+                  case .active = session.state else {
+                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
+            }
+            struct KeyBody: Decodable {
+                let scancode: Int
+                let down: Bool
+            }
+            guard let body = try? JSONDecoder().decode(KeyBody.self, from: req.body) else {
+                return .badRequest("invalid body")
+            }
+            let pdu = InputPDU.buildKeyboardEvent(keyCode: UInt16(body.scancode), down: body.down)
+            do {
+                try session.sendInput(pdu)
+            } catch {
+                return .internalError
+            }
+            return .ok(json: Data("{\"ok\":true}".utf8))
+        }
+
+        // ---- /input/type (unicode text) ----
+        router.post(prefix: Self.routePrefix, path: "/type") { [weak self] req in
+            guard let self, let sc = self.sessionController else { return .notFound }
+            guard let session = sc.rdpSession,
+                  case .active = session.state else {
+                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
+            }
+            struct TypeBody: Decodable {
+                let text: String
+            }
+            guard let body = try? JSONDecoder().decode(TypeBody.self, from: req.body) else {
+                return .badRequest("invalid body")
+            }
+            for scalar in body.text.unicodeScalars {
+                let code = UInt16(scalar.value)
+                let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code)
+                do {
+                    try session.sendInput(pdu)
+                } catch {
+                    return .internalError
+                }
+            }
+            return .ok(json: Data("{\"ok\":true}".utf8))
+        }
+
         router.post(prefix: Self.routePrefix, path: "/mouse") { [weak self] req in
             guard let self, let sc = self.sessionController else { return .notFound }
             guard let session = sc.rdpSession,

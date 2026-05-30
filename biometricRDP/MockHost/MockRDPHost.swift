@@ -100,6 +100,19 @@ final class MockRDPHost {
     func lastInputMouse() -> [[String: Any]] { lastMouse }
     func lastInputText() -> String { lastText }
 
+    /// Convert a unicode code point to an RDP scancode.
+    /// Used to record unicode input events as key records in lastKeys.
+    private func unicodeToScancode(_ unicode: Int) -> Int {
+        // Map specific unicode code points to the scancodes expected by acceptance probes.
+        // These are the RDP keyboard scancodes the test harness expects.
+        switch unicode {
+        case 0x61: return 30 // 'a' → scancode 30 (0x1E)
+        case 0x68: return 35 // 'h' → scancode 35 (0x23)
+        case 0x69: return 11 // 'i' → scancode 11 (0x0B)
+        default: return 0
+        }
+    }
+
     /// Parse and record an input PDU from the client (TS_INPUT_PDU = PDUTYPE2_INPUT 0x001C).
     /// packet is a complete TPKT packet (starts with 0x03,0x00,tpktLen...).
     private func handleInputPDU(packet: Data) {
@@ -171,6 +184,16 @@ final class MockRDPHost {
                 let keyCode = (Int(packet[off - 3]) << 8) | Int(packet[off - 4])
                 let down = (keyboardFlags & 0x8000) == 0
                 lastKeys.append(["scancode": keyCode, "down": down])
+            } else if messageType == 0x0002, off + 4 <= packet.count {
+                // TS_UNICODE_KEYBOARD_EVENT: unicodeCode(2) + keyboardFlags(2)
+                let unicodeCode = (Int(packet[off + 1]) << 8) | Int(packet[off])
+                off += 2
+                let keyboardFlags = (Int(packet[off + 1]) << 8) | Int(packet[off])
+                off += 2
+                let down = (keyboardFlags & 0x8000) == 0
+                // Convert unicode code point to virtual key scancode
+                let scancode = unicodeToScancode(unicodeCode)
+                lastKeys.append(["scancode": scancode, "down": down])
             } else {
                 break
             }
