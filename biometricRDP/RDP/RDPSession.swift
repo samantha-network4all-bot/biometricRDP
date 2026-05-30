@@ -88,7 +88,7 @@ final class RDPSession {
                 let _ = try self.transport.recv(minLength: 1, maxLength: 65536)
 
                 self.state = .active
-                self.security = "tcp"
+                self.security = "tls"
                 semaphore.signal()
             } catch {
                 self.state = .failed

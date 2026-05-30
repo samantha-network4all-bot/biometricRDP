@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 final class MockRDPHost {
 
@@ -15,13 +16,27 @@ final class MockRDPHost {
     private var lastMouse: [[String: Any]] = []
     private var lastText: String = ""
 
+    // MARK: - Embedded self-signed PKCS#12 identity (base64-encoded, password: "mock")
+
+    private static let mockP12Base64 = "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"
+
     func start(nla: Bool, username: String, password: String,
                width: Int, height: Int, bpp: Int) throws {
         self.width = width
         self.height = height
         self.bpp = bpp
 
-        let params = NWParameters.tcp
+        // Create TLS parameters with embedded self-signed cert
+        let tlsOptions = NWProtocolTLS.Options()
+        let params = NWParameters(tls: tlsOptions, tcp: NWProtocolTCP.Options())
+
+        // Build SecIdentity from embedded PKCS#12 blob
+        guard let identity = Self.loadTLSIdentity() else {
+            throw NSError(domain: "MockRDPHost", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "failed to create TLS identity"])
+        }
+        sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, identity)
+
         listener = try NWListener(using: params, on: .any)
         listener?.stateUpdateHandler = { state in
             if case .failed(let err) = state {
@@ -63,6 +78,18 @@ final class MockRDPHost {
     func lastInputMouse() -> [[String: Any]] { lastMouse }
     func lastInputText() -> String { lastText }
     func pushSolid(r: UInt8, g: UInt8, b: UInt8) { /* S2 placeholder */ }
+
+    // MARK: - PKCS#12 → sec_identity_t
+
+    private static func loadTLSIdentity() -> sec_identity_t? {
+        guard let p12Data = Data(base64Encoded: mockP12Base64) else { return nil }
+        let options: [String: String] = [kSecImportExportPassphrase as String: "mock"]
+        var items: CFArray?
+        let status = SecPKCS12Import(p12Data as CFData, options as CFDictionary, &items)
+        guard status == errSecSuccess, let arr = items as? [[String: Any]] else { return nil }
+        guard let first = arr.first, let identity = first[kSecImportItemIdentity as String] else { return nil }
+        return sec_identity_create(identity as! SecIdentity)
+    }
 
     // MARK: - Connection handling
 

@@ -112,7 +112,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             switch session.state {
             case .active:
                 self.state = .active
-                self.security = "tcp"
+                self.security = "tls"
                 ok = true
             case .failed:
                 self.state = .failed

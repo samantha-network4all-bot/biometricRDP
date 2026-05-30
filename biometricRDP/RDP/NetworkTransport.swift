@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 final class NetworkTransport: Transport {
 
@@ -18,7 +19,24 @@ final class NetworkTransport: Transport {
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port) ?? .any
         )
-        let params = NWParameters.tcp
+
+        // Create parameters with TLS
+        let tlsOptions = NWProtocolTLS.Options()
+        // Allow self-signed certs from the mock host
+        sec_protocol_options_set_verify_block(
+            tlsOptions.securityProtocolOptions,
+            { (metadata, trust, completion) in
+                let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
+                var error: CFError?
+                _ = SecTrustEvaluateWithError(secTrust, &error)
+                // Always accept — self-signed mock cert
+                completion(true)
+            },
+            DispatchQueue(label: "rdp-tls-verify")
+        )
+
+
+        let params = NWParameters(tls: tlsOptions, tcp: NWProtocolTCP.Options())
         let conn = NWConnection(to: endpoint, using: params)
         connection = conn
 
