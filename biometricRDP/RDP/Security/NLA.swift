@@ -82,7 +82,7 @@ enum NLA {
         }
         let ntProofStr = ntRespData.subdata(in: 0..<16)
 
-        let userDomain = user.uppercased().data(using: .utf16LittleEndian) ?? Data()
+        let userDomain = (user.uppercased() + domain).data(using: .utf16LittleEndian) ?? Data()
         let ntProofKey = NTLMv2.hmacMD5(key: ntHash, data: userDomain)
         let sessionKey = NTLMv2.hmacMD5(key: ntProofKey, data: ntProofStr)
 

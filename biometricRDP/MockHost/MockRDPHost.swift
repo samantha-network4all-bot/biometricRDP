@@ -12,6 +12,7 @@ final class MockRDPHost {
     private var mockUsername: String = ""
     private var mockPassword: String = ""
     private var serverChallengeData: Data = Data()
+    private var targetInfoData: Data = Data()
 
     private var listener: NWListener?
     private var connection: NWConnection?
@@ -107,10 +108,10 @@ final class MockRDPHost {
         handleHandshakePhase(conn)
     }
 
-    private enum Phase { case waitingNLA, waitingNLAAuth, waitingCR, waitingMCS, waitingCaps, active }
+    private enum Phase { case waitingCR, waitingNLA, waitingNLAAuth, waitingMCS, waitingCaps, active }
 
     private func handleHandshakePhase(_ conn: NWConnection) {
-        var phase: Phase = nlaEnabled ? .waitingNLA : .waitingCR
+        var phase: Phase = .waitingCR
         var buf = Data()
 
         func readNext() {
@@ -121,19 +122,19 @@ final class MockRDPHost {
                 switch phase {
                 case .waitingNLA:
                     if let tsReq = self.consumeTSRequest(buf: &buf) {
-                        let (serverChallenge, challengeTS) = self.buildNLAChallenge(from: tsReq)
+                        let (serverChallenge, targetInfo, challengeTS) = self.buildNLAChallenge(from: tsReq)
                         self.serverChallengeData = serverChallenge
+                        self.targetInfoData = targetInfo
                         conn.send(content: challengeTS, completion: .contentProcessed { _ in })
-                        // Keep serverChallenge for later validation
                         phase = .waitingNLAAuth
                     }
                 case .waitingNLAAuth:
                     if let authTS = self.consumeTSRequest(buf: &buf) {
-                        let valid = self.validateNLAAuth(authTS, serverChallenge: "placeholder")
+                        let valid = self.validateNLAAuth(authTS)
                         if valid {
                             let successTS = self.buildNLASuccess()
                             conn.send(content: successTS, completion: .contentProcessed { _ in })
-                            phase = .waitingCR
+                            phase = .waitingMCS
                         } else {
                             let failTS = self.buildNLAFailure()
                             conn.send(content: failTS, completion: .contentProcessed { _ in
@@ -145,8 +146,13 @@ final class MockRDPHost {
                     }
                 case .waitingCR:
                     if self.consumeX224CR(buf: &buf) {
-                        conn.send(content: self.buildCC(), completion: .contentProcessed { _ in })
-                        phase = .waitingMCS
+                        let proto: UInt32 = self.nlaEnabled ? 0x01 : 0x00
+                        conn.send(content: self.buildCC(negotiatedProtocol: proto), completion: .contentProcessed { _ in })
+                        if self.nlaEnabled {
+                            phase = .waitingNLA
+                        } else {
+                            phase = .waitingMCS
+                        }
                     }
                 case .waitingMCS:
                     if self.consumeMCSConnect(buf: &buf) {
@@ -227,22 +233,25 @@ final class MockRDPHost {
         return MockRDPHost.estimateTSRequestLength(buf)
     }
 
-    private func buildNLAChallenge(from tsReq: TSRequest) -> (serverChallenge: Data, challengeTS: Data) {
+    private func buildNLAChallenge(from tsReq: TSRequest) -> (serverChallenge: Data, targetInfo: Data, challengeTS: Data) {
         // Generate 8-byte random server challenge
         var challenge = Data(count: 8)
         _ = challenge.withUnsafeMutableBytes { ptr in
             SecRandomCopyBytes(kSecRandomDefault, 8, ptr.baseAddress!)
         }
 
+        // Build target info for NTLM CHALLENGE
+        let targetInfo = buildTargetInfo()
+
         // Build NTLM CHALLENGE message
-        let ntlmChallenge = buildNTLMChallenge(serverChallenge: challenge)
+        let ntlmChallenge = buildNTLMChallenge(serverChallenge: challenge, targetInfo: targetInfo)
 
         // Wrap in TSRequest as negoTokens[0]
         let challengeTS = CredSSP.wrapTSRequest(negoTokens: [ntlmChallenge])
-        return (challenge, challengeTS)
+        return (challenge, targetInfo, challengeTS)
     }
 
-    private func buildNTLMChallenge(serverChallenge: Data) -> Data {
+    private func buildNTLMChallenge(serverChallenge: Data, targetInfo: Data) -> Data {
         var msg = Data()
 
         // Signature "NTLMSSP\0"
@@ -266,8 +275,7 @@ final class MockRDPHost {
         msg.append(contentsOf: [UInt8](repeating: 0, count: 8))
 
         // TargetInfo fields
-        let targetInfo = buildTargetInfo()
-        let targetInfoOffset = 56 + targetInfo.count
+        let targetInfoOffset = 56
         msg.append(contentsOf: withUnsafeBytes(of: UInt16(targetInfo.count).littleEndian) { Array($0) }) // Len
         msg.append(contentsOf: withUnsafeBytes(of: UInt16(targetInfo.count).littleEndian) { Array($0) }) // MaxLen
         msg.append(contentsOf: withUnsafeBytes(of: UInt32(targetInfoOffset).littleEndian) { Array($0) }) // BufferOffset
@@ -299,11 +307,23 @@ final class MockRDPHost {
         return info
     }
 
-    private func validateNLAAuth(_ tsReq: TSRequest, serverChallenge: String) -> Bool {
-        // Extract authInfo from the TSRequest (contains TSCredentials)
-        guard let authInfo = tsReq.authInfo, authInfo.count >= 6 else { return false }
+    private func validateNLAAuth(_ tsReq: TSRequest) -> Bool {
+        // Extract the AUTHENTICATE message from negoTokens
+        guard let authMsg = tsReq.negoTokens.first else {
+            // Fall back: check password from authInfo (for compatibility)
+            return checkAuthInfoPassword(tsReq)
+        }
 
-        // Parse TSCredentials from authInfo (simple struct packing)
+        // Validate NTLMv2 response
+        return NTLMv2.verifyAuthenticate(data: authMsg,
+                                          username: mockUsername,
+                                          password: mockPassword,
+                                          challenge: serverChallengeData,
+                                          targetInfo: targetInfoData)
+    }
+
+    private func checkAuthInfoPassword(_ tsReq: TSRequest) -> Bool {
+        guard let authInfo = tsReq.authInfo, authInfo.count >= 6 else { return false }
         var off = 0
         guard authInfo.count >= off + 2 else { return false }
         let domainLen = Int(readLE16(data: authInfo, offset: off))
@@ -320,8 +340,6 @@ final class MockRDPHost {
         off += 2
         guard authInfo.count >= off + passLen else { return false }
         let passData = authInfo.subdata(in: off..<(off + passLen))
-
-        // Compare password (plaintext for test mock)
         let receivedPassword = String(data: passData, encoding: .utf16LittleEndian) ?? ""
         return receivedPassword == mockPassword
     }
@@ -408,9 +426,17 @@ final class MockRDPHost {
 
     // MARK: - PDU builders
 
-    private func buildCC() -> Data {
+    private func buildCC(negotiatedProtocol: UInt32 = 0) -> Data {
         let x224: [UInt8] = [0xD0, 0x00, 0x00, 0x00, 0x00, 0x00]
-        let neg: [UInt8] = [0x02, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]
+        let neg: [UInt8] = [
+            0x02, 0x00,       // TYPE_RDP_NEG_RSP
+            0x00,             // flags
+            0x08, 0x00,       // length = 8
+            UInt8((negotiatedProtocol >> 24) & 0xFF),
+            UInt8((negotiatedProtocol >> 16) & 0xFF),
+            UInt8((negotiatedProtocol >> 8) & 0xFF),
+            UInt8(negotiatedProtocol & 0xFF)
+        ]
         var tpdu = x224; tpdu.append(contentsOf: neg)
         let totalLen = 4 + 1 + tpdu.count
         let tpkt: [UInt8] = [0x03, 0x00, UInt8((totalLen >> 8) & 0xFF), UInt8(totalLen & 0xFF)]

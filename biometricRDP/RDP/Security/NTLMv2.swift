@@ -298,7 +298,8 @@ enum NTLMv2 {
         // ntProofStr is first 16 bytes
         let receivedProof = ntRespData.subdata(in: 0..<16)
 
-        // Compute expected
+        // Compute expected: NTOWFv2 = HMAC-MD5(NTOWFv1, Unicode(UpperCase(UserName) || UserDomain))
+        // For verify, use empty domain (matching client behavior when no domain is provided)
         let passwordData = password.data(using: .utf16LittleEndian) ?? Data()
         let ntHash = MD4.md4(passwordData)
         let userDomain = username.uppercased().data(using: .utf16LittleEndian) ?? Data()

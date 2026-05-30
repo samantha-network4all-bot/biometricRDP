@@ -53,8 +53,20 @@ final class RDPSession {
                 // TLS (handled by NetworkTransport; state reflects post-TLS)
                 self.state = .tls
 
-                // NLA (CredSSP + NTLMv2)
-                if !username.isEmpty {
+                // X.224 — send CR with PROTOCOL_HYBRID requested, check CC for NLA support
+                self.state = .x224
+                try self.transport.send(X224.buildConnectionRequest())
+                let ccData = try self.transport.recv(minLength: 1, maxLength: 65536)
+                guard let negotiatedProto = X224.parseConnectionConfirm(ccData) else {
+                    self.state = .failed
+                    self.errorReason = "X.224: connection rejected"
+                    semaphore.signal()
+                    return
+                }
+
+                // NLA (CredSSP + NTLMv2) — only if server negotiated PROTOCOL_HYBRID
+                let supportsNLA = (negotiatedProto & 0x01) != 0
+                if supportsNLA && !username.isEmpty {
                     do {
                         self.state = .nla
                         try NLA.performNLA(transport: self.transport,
@@ -67,17 +79,6 @@ final class RDPSession {
                         semaphore.signal()
                         return
                     }
-                }
-
-                // X.224
-                self.state = .x224
-                try self.transport.send(X224.buildConnectionRequest())
-                let ccData = try self.transport.recv(minLength: 1, maxLength: 65536)
-                guard X224.parseConnectionConfirm(ccData) != nil else {
-                    self.state = .failed
-                    self.errorReason = "X.224: invalid connection confirm"
-                    semaphore.signal()
-                    return
                 }
 
                 // MCS
@@ -109,7 +110,9 @@ final class RDPSession {
                 let _ = try self.transport.recv(minLength: 1, maxLength: 65536)
 
                 self.state = .active
-                self.security = "tls"
+                if self.security.isEmpty {
+                    self.security = "tls"
+                }
                 semaphore.signal()
             } catch {
                 self.state = .failed
