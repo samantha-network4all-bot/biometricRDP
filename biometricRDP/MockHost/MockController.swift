@@ -82,7 +82,11 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
                 let r = Self.parseHex(body.color, offset: 0)
                 let g = Self.parseHex(body.color, offset: 2)
                 let b = Self.parseHex(body.color, offset: 4)
-                self.mockHost.pushSolid(r: r, g: g, b: b)
+                let x = body.rect.count > 0 ? body.rect[0] : 0
+                let y = body.rect.count > 1 ? body.rect[1] : 0
+                let w = body.rect.count > 2 ? body.rect[2] : self.mockHost.width
+                let h = body.rect.count > 3 ? body.rect[3] : self.mockHost.height
+                self.mockHost.pushSolid(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
             }
             return .ok(json: Data(#"{"ok":true}"#.utf8))
         }

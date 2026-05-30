@@ -97,85 +97,112 @@ final class MockRDPHost {
     func lastInputKeys() -> [[String: Any]] { lastKeys }
     func lastInputMouse() -> [[String: Any]] { lastMouse }
     func lastInputText() -> String { lastText }
-    func pushSolid(r: UInt8, g: UInt8, b: UInt8) {
+    func pushSolid(r: UInt8, g: UInt8, b: UInt8, x: Int = 0, y: Int = 0,
+                    width: Int = -1, height: Int = -1) {
         guard let conn = connection else { return }
 
-        // Build raw BGR bitmap data for the full width×height rectangle
-        let bytesPerPixel = bpp / 8
-        let rowStride = width * bytesPerPixel
-        let paddedRowStride = ((rowStride + 3) / 4) * 4 // 4-byte aligned
-        var bitmapData = Data(count: paddedRowStride * height)
+        let w = width < 0 ? self.width : width
+        let h = height < 0 ? self.height : height
+        let destX = x
+        let destY = y
 
-        // Fill with solid color in BGR format
-        for y in 0..<height {
-            let rowStart = y * paddedRowStride
-            for x in 0..<width {
-                let pixelOff = rowStart + x * bytesPerPixel
-                if bytesPerPixel == 4 {
-                    bitmapData[pixelOff]     = b  // B
-                    bitmapData[pixelOff + 1] = g  // G
-                    bitmapData[pixelOff + 2] = r  // R
-                    bitmapData[pixelOff + 3] = 0  // unused
-                } else if bytesPerPixel == 3 {
-                    bitmapData[pixelOff]     = b
-                    bitmapData[pixelOff + 1] = g
-                    bitmapData[pixelOff + 2] = r
-                } else if bytesPerPixel == 2 {
-                    // RGB565
-                    let r5 = (r >> 3) & 0x1F
-                    let g6 = (g >> 2) & 0x3F
-                    let b5 = (b >> 3) & 0x1F
-                    let pixel565 = (r5 << 11) | (g6 << 5) | b5
-                    bitmapData[pixelOff]     = UInt8(pixel565 & 0xFF)
-                    bitmapData[pixelOff + 1] = UInt8((pixel565 >> 8) & 0xFF)
-                }
-            }
+        guard w > 0, h > 0 else { return }
+
+        let bytesPerPixel = bpp / 8
+        guard bytesPerPixel > 0 else { return }
+
+        // Build a solid-color pixel row
+        let rowBytes = w * bytesPerPixel
+        let paddedRowBytes = ((rowBytes + 3) / 4) * 4
+        var solidRow = Data(count: paddedRowBytes)
+        for col in 0..<w {
+            let off = col * bytesPerPixel
+            writeSolidPixel(data: &solidRow, offset: off, bytesPerPixel: bytesPerPixel, r: r, g: g, b: b)
         }
 
-        // Build TS_BITMAP_DATA (slow-path)
-        let destLeft: UInt16 = 0
-        let destTop: UInt16 = 0
-        let destRight: UInt16 = UInt16(width - 1)
-        let destBottom: UInt16 = UInt16(height - 1)
-        let w: UInt16 = UInt16(width)
-        let h: UInt16 = UInt16(height)
-        let bppVal: UInt16 = UInt16(bpp)
-        let flags: UInt16 = 0x0001 // BITMAP_COMPRESSION (we use raw, but some clients expect this)
-        // Actually for raw uncompressed, flags should be 0
-        let rawFlags: UInt16 = 0
-        let bitmapDataLen: UInt16 = UInt16(bitmapData.count)
+        // RDP totalLength and bitmapDataLength are 16-bit fields.
+        // Send one TPKT packet per horizontal strip to stay within limits.
+        // Each strip = one TS_BITMAP_DATA rectangle.
+        // Max rows per strip so that: 6(header) + 4(update) + 18(bitmap_hdr) + rows*paddedRowBytes <= 65535
+        let maxRowsPerStrip = max(1, (65535 - 6 - 4 - 18) / paddedRowBytes)
+        var remainingRows = h
+        var currentRow = 0 // 0 = top of rect
 
-        var bitmapBody = Data()
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: destLeft.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: destTop.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: destRight.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: destBottom.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: w.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: h.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: bppVal.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: rawFlags.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: withUnsafeBytes(of: bitmapDataLen.littleEndian) { Array($0) })
-        bitmapBody.append(contentsOf: bitmapData)
+        while remainingRows > 0 {
+            let stripRows = min(remainingRows, maxRowsPerStrip)
+            let stripDestY = destY + currentRow
+            let stripDestLeft = UInt16(destX)
+            let stripDestTop = UInt16(stripDestY)
+            let stripDestRight = UInt16(destX + w - 1)
+            let stripDestBottom = UInt16(stripDestY + stripRows - 1)
+            let stripW = UInt16(w)
+            let stripH = UInt16(stripRows)
+            let bppVal = UInt16(bpp)
+            let rawFlags: UInt16 = 0
 
-        // TS_UPDATE_DATA: updateType=UPDATETYPE_BITMAP(1), numRects=1
-        var updateBody = Data()
-        updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(0x0001).littleEndian) { Array($0) })
-        updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
-        updateBody.append(contentsOf: bitmapBody)
+            var stripBitmapData = Data()
+            for _ in 0..<stripRows {
+                stripBitmapData.append(solidRow)
+            }
+            let bitmapDataLen = UInt16(stripBitmapData.count)
 
-        // Share Data Header: totalLen(2) + pduType(2) + pduSource(2)
-        let pduType2: UInt16 = 0x0002 | 0x0010 // PDUTYPE2_UPDATE | PDUTYPE2_BITMAP
-        let pduSource: UInt16 = 0x03E9
-        let shareDataLen = 6 + 4 + updateBody.count // header(6) + updateType+numRects(4) + bitmapBody
-        var shareData = Data()
-        shareData.append(contentsOf: withUnsafeBytes(of: UInt16(shareDataLen).littleEndian) { Array($0) })
-        shareData.append(contentsOf: withUnsafeBytes(of: pduType2.littleEndian) { Array($0) })
-        shareData.append(contentsOf: withUnsafeBytes(of: pduSource.littleEndian) { Array($0) })
-        shareData.append(contentsOf: updateBody)
+            // TS_BITMAP_DATA
+            var bitmapBody = Data()
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestLeft.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestTop.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestRight.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestBottom.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripW.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripH.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: bppVal.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: rawFlags.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: bitmapDataLen.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: stripBitmapData)
 
-        // Wrap in TPKT + X.224
-        let packet = wrapTPKT(payload: shareData)
-        conn.send(content: packet, completion: .contentProcessed { _ in })
+            // TS_UPDATE_DATA: updateType=UPDATETYPE_BITMAP, numRects=1
+            var updateBody = Data()
+            updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(0x0001).littleEndian) { Array($0) })
+            updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
+            updateBody.append(bitmapBody)
+
+            // Share Data Header: totalLen includes share control header (6) + update body
+            let encodedPduType: UInt16 = 0x0002 // PDUTYPE2_UPDATE
+            let pduSource: UInt16 = 0x03E9
+            let shareDataLen = 6 + updateBody.count
+            var shareData = Data()
+            shareData.append(contentsOf: withUnsafeBytes(of: UInt16(shareDataLen).littleEndian) { Array($0) })
+            shareData.append(contentsOf: withUnsafeBytes(of: encodedPduType.littleEndian) { Array($0) })
+            shareData.append(contentsOf: withUnsafeBytes(of: pduSource.littleEndian) { Array($0) })
+            shareData.append(updateBody)
+
+            // Wrap in TPKT + X.224 and send
+            let packet = wrapTPKT(payload: shareData)
+            conn.send(content: packet, completion: .contentProcessed { _ in })
+
+            currentRow += stripRows
+            remainingRows -= stripRows
+        }
+    }
+
+    /// Write a single solid-color pixel into a byte buffer at the given offset.
+    private func writeSolidPixel(data: inout Data, offset: Int, bytesPerPixel: Int, r: UInt8, g: UInt8, b: UInt8) {
+        if bytesPerPixel == 4 {
+            data[offset]     = b
+            data[offset + 1] = g
+            data[offset + 2] = r
+            data[offset + 3] = 0
+        } else if bytesPerPixel == 3 {
+            data[offset]     = b
+            data[offset + 1] = g
+            data[offset + 2] = r
+        } else if bytesPerPixel == 2 {
+            let r5 = (r >> 3) & 0x1F
+            let g6 = (g >> 2) & 0x3F
+            let b5 = (b >> 3) & 0x1F
+            let pixel565 = (r5 << 11) | (g6 << 5) | b5
+            data[offset]     = UInt8(pixel565 & 0xFF)
+            data[offset + 1] = UInt8((pixel565 >> 8) & 0xFF)
+        }
     }
 
     // MARK: - Self-signed cert → sec_identity_t
@@ -618,11 +645,25 @@ final class MockRDPHost {
     }
 
     private func wrapTPKT(payload: Data) -> Data {
-        let hdr: [UInt8] = [UInt8(2 + payload.count), 0xF0, 0x80]
-        let tpktLen = 4 + hdr.count + payload.count
+        // X.224 data TPDU header: LI + 0xF0 + 0x80(EOT)
+        // LI encodes the length of bytes after the LI byte (0xF0 + 0x80 + payload).
+        // For payloads > 253 bytes, use extended LI: 0x82 + 2-byte LE length.
+        let x224PayloadLen = 2 + payload.count // 0xF0 + 0x80 + payload
+        var x224Hdr = Data()
+        if x224PayloadLen < 128 {
+            x224Hdr.append(UInt8(x224PayloadLen))
+        } else {
+            // Extended length: 0x82 + 2-byte LE length
+            x224Hdr.append(0x82)
+            x224Hdr.append(UInt8(x224PayloadLen & 0xFF))
+            x224Hdr.append(UInt8((x224PayloadLen >> 8) & 0xFF))
+        }
+        x224Hdr.append(0xF0) // data TPDU
+        x224Hdr.append(0x80) // EOT
+        let tpktLen = 4 + x224Hdr.count + payload.count
         let tpkt: [UInt8] = [0x03, 0x00, UInt8((tpktLen >> 8) & 0xFF), UInt8(tpktLen & 0xFF)]
         var pkt = Data(tpkt)
-        pkt.append(contentsOf: hdr)
+        pkt.append(contentsOf: x224Hdr)
         pkt.append(payload)
         return pkt
     }

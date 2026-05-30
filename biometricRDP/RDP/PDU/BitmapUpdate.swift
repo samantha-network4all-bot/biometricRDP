@@ -36,12 +36,23 @@ enum BitmapUpdate {
             let packetEnd = offset + tpktLen
             var pktOffset = offset + 4 // skip TPKT header
 
-            // X.224 data TPDU: LI(1) + type(1) + credit(1)
+            // X.224 data TPDU: LI + type(0xF0) + credit(0x80)
+            // LI may be short form (< 0x80) or extended (>= 0x80)
             guard pktOffset + 3 <= packetEnd else { break }
-            let li = Int(data[pktOffset])
-            guard li >= 2 else { break }
-            guard data[pktOffset + 1] == 0xF0 else { break } // data TPDU
-            pktOffset += 3 // skip LI, type, credit
+            let liByte = Int(data[pktOffset])
+            let x224HdrLen: Int
+            if liByte < 0x80 {
+                // Short form: LI(1) + code(1) + credit(1) = 3 bytes
+                x224HdrLen = 3
+            } else {
+                // Extended form: LI(1) + lenBytes(N) + code(1) + credit(1)
+                let lenBytes = liByte & 0x7F
+                guard lenBytes >= 2 else { break }
+                x224HdrLen = 1 + lenBytes + 2
+            }
+            guard pktOffset + x224HdrLen <= packetEnd else { break }
+            guard data[pktOffset + x224HdrLen - 2] == 0xF0 else { break } // data TPDU code
+            pktOffset += x224HdrLen
 
             // Remaining bytes = Share Data Header + payload
             let shareDataStart = pktOffset

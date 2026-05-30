@@ -5,7 +5,8 @@ import Foundation
 enum BitmapCodec {
 
     /// Decode raw (uncompressed) bitmap data into the framebuffer.
-    /// `bitmapData` is raw pixel bytes in BGR (or BGRA) format, bottom-up by default.
+    /// `bitmapData` is raw pixel bytes in BGR (or BGRA) format, top-down.
+    /// Uncompressed RDP bitmaps are sent top-down (row 0 = first scan line).
     /// `bpp` determines bytes per pixel.
     public static func decodeRaw(bitmapData: Data, destX: Int, destY: Int,
                                   width: Int, height: Int, bpp: Int,
@@ -17,12 +18,9 @@ enum BitmapCodec {
         let srcRowStride = width * bytesPerPixel
         var dataOffset = 0
 
-        // RDP sends bitmap data bottom-up by default (unless compressed with a flag).
-        // For uncompressed, row 0 in the data = bottom of the rectangle.
-        // We decode row by row.
+        // RDP uncompressed bitmap data is top-down: row 0 = top scan line = destY.
         for row in 0..<height {
-            // Source row 0 = bottom row, so flip Y
-            let fbY = destY + (height - 1 - row)
+            let fbY = destY + row
 
             for col in 0..<width {
                 let fbX = destX + col

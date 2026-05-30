@@ -303,12 +303,12 @@ enum NTLMv2 {
         let receivedProof = ntRespData.subdata(in: 0..<16)
 
         // Parse the AUTHENTICATE to find the domain and user for NTOWFv2
-        // DomainName fields: Len=offset 12, BufferOffset=offset 16
-        // UserName fields: Len=offset 28, BufferOffset=offset 32
-        let domainLen = Int(readLE16(data: data, offset: 12))
-        let domainOffset = Int(readLE32(data: data, offset: 16))
-        let userLen = Int(readLE16(data: data, offset: 28))
-        let userOffset = Int(readLE32(data: data, offset: 32))
+        // DomainName fields: Len=offset 28, BufferOffset=offset 32
+        // UserName fields: Len=offset 36, BufferOffset=offset 40
+        let domainLen = Int(readLE16(data: data, offset: 28))
+        let domainOffset = Int(readLE32(data: data, offset: 32))
+        let userLen = Int(readLE16(data: data, offset: 36))
+        let userOffset = Int(readLE32(data: data, offset: 40))
 
         var domainStr = ""
         var userStr = ""

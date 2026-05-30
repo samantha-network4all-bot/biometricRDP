@@ -30,6 +30,7 @@ final class RDPSession {
     private(set) var framebuffer: Framebuffer
     private var readerActive = false
     private let readerQueue = DispatchQueue(label: "rdp-session-reader")
+    private var recvBuffer = Data()
 
     private static let connectTimeout: TimeInterval = 10.0
 
@@ -155,6 +156,36 @@ final class RDPSession {
         }
     }
 
+    /// Try to extract and process one complete TPKT packet from the receive buffer.
+    /// Returns true if a packet was processed.
+    private func processOnePacket() -> Bool {
+        // TPKT header: version(1) + reserved(1) + length(2) = 4 bytes
+        guard recvBuffer.count >= 4 else { return false }
+        guard recvBuffer[0] == 0x03 else {
+            // Unknown data; discard to next TPKT or clear
+            if let next = recvBuffer.dropFirst().firstIndex(of: 0x03) {
+                recvBuffer = Data(recvBuffer.dropFirst(next))
+            } else {
+                recvBuffer.removeAll()
+            }
+            return false
+        }
+        let tpktLen = (Int(recvBuffer[2]) << 8) | Int(recvBuffer[3])
+        guard tpktLen >= 7 else {
+            // Bad header; skip this byte and retry
+            recvBuffer = Data(recvBuffer.dropFirst())
+            return false
+        }
+        guard recvBuffer.count >= tpktLen else {
+            return false // incomplete, wait for more data
+        }
+        // Extract one complete TPKT packet
+        let packet = recvBuffer.prefix(tpktLen)
+        recvBuffer = Data(recvBuffer.dropFirst(tpktLen))
+        handleIncomingData(Data(packet))
+        return true
+    }
+
     private func readerLoop() {
         while readerActive && state == .active {
             guard transport.isConnected else {
@@ -163,10 +194,15 @@ final class RDPSession {
                 return
             }
 
+            let hadData = processOnePacket()
+            if hadData {
+                continue // process more buffered packets before reading again
+            }
+
             do {
                 let data = try transport.recv(minLength: 1, maxLength: 65536)
                 if !data.isEmpty {
-                    handleIncomingData(data)
+                    recvBuffer.append(data)
                 }
             } catch {
                 readerActive = false
@@ -182,7 +218,6 @@ final class RDPSession {
 
         for rect in rects {
             if rect.isCompressed {
-                // RLE decode not yet implemented in this slice
                 BitmapCodec.decodeInterleavedRLE(
                     bitmapData: rect.bitmapData,
                     destX: rect.destX, destY: rect.destY,
