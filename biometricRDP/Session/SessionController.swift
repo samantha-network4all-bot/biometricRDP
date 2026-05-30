@@ -59,6 +59,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
                 let width: Int
                 let height: Int
                 let bpp: Int
+                let nla: Bool?
             }
             guard let body = try? JSONDecoder().decode(ConnectBody.self, from: req.body) else {
                 return .badRequest("invalid body")
@@ -105,7 +106,8 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
                 password: body.password,
                 width: body.width,
                 height: body.height,
-                bpp: body.bpp
+                bpp: body.bpp,
+                nla: body.nla ?? true
             )
 
             let ok: Bool

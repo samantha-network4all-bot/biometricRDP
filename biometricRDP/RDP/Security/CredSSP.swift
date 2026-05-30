@@ -35,7 +35,8 @@ enum CredSSP {
             for token in negoTokens {
                 // NegoData ::= SEQUENCE { negoToken [0] OCTET_STRING }
                 let octetStr = derOctetString(token)
-                let negoSeq = derSequence(octetStr)
+                let taggedToken = derContextSpecific(tag: 0, content: octetStr)
+                let negoSeq = derSequence(taggedToken)
                 negoData.append(negoSeq)
             }
             let seqOf = derSequence(negoData)
@@ -245,7 +246,7 @@ enum CredSSP {
     }
 
     private static func parseNegoTokens(_ data: Data, dataLen: Int) -> [Data]? {
-        // NegoData is a SEQUENCE of SEQUENCE { negoToken OCTET_STRING }
+        // NegoData is a SEQUENCE of SEQUENCE { negoToken [0] OCTET_STRING }
         var offset = 0
         var tokens: [Data] = []
 
@@ -255,16 +256,22 @@ enum CredSSP {
             let seqEnd = seqContentOff + seqLen
             guard seqEnd <= dataLen else { break }
 
-            // Inside: negoToken [0] OCTET_STRING
+            // Parse each NegoData entry inside the outer SEQUENCE
             var innerOff = seqContentOff
             while innerOff < seqEnd {
                 guard innerOff < dataLen else { break }
                 var tag = data[innerOff]
-                // Could be context-specific [0] wrapping OCTET_STRING, or just OCTET_STRING
                 let innerDataOff = innerOff + 1
                 guard let (innerLenInit, innerOff2) = parseLength(data, offset: innerDataOff, dataLen: seqEnd) else { break }
                 var innerContentOff = innerOff2
                 var innerLen = innerLenInit
+
+                // NegoData ::= SEQUENCE { negoToken [0] OCTET_STRING }
+                if tag == tagSequence {
+                    // Unwrap the inner SEQUENCE to find [0] OCTET_STRING inside
+                    innerOff = innerContentOff
+                    continue
+                }
 
                 if tag == 0xA0 {
                     // Context-specific [0] — unwrap
