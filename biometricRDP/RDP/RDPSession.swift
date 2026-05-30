@@ -6,6 +6,7 @@ final class RDPSession {
         case disconnected
         case connecting
         case tcp
+        case tls
         case x224
         case mcs
         case capabilities
@@ -47,6 +48,9 @@ final class RDPSession {
             do {
                 self.state = .tcp
                 try self.transport.connect(host: host, port: port)
+
+                // TLS (handled by NetworkTransport; state reflects post-TLS)
+                self.state = .tls
 
                 // X.224
                 self.state = .x224
