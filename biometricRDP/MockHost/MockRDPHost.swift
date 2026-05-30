@@ -206,51 +206,38 @@ final class MockRDPHost {
     // MARK: - NLA helpers
 
     private func consumeTSRequest(buf: inout Data) -> TSRequest? {
-        // We need to find where the DER sequence starts
-        // A TSRequest is a SEQUENCE, so find the first 0x30 and try to parse
         guard !buf.isEmpty else { return nil }
-
-        // Use CredSSP.parseTSRequest which handles DER
+        // Try to parse the TSRequest from the buffer
         guard let tsReq = CredSSP.parseTSRequest(buf) else { return nil }
-
-        // We need to determine how many bytes consumed from buf
-        // Re-encode to figure out consumed length (not perfect but works for testing)
-        // Better: estimate from the data — we know the negoTokens contain the NTLM messages
-        // For simplicity, find the total DER length by re-wrapping
-        let consumed = estimateTSRequestLength(buf)
+        // Figure out how many bytes were consumed by parsing the DER length
+        let consumed = MockRDPHost.estimateDERTotalLength(buf)
         if consumed > 0 && consumed <= buf.count {
             buf = Data(buf.dropFirst(consumed))
         } else {
-            // Fallback: consume all we have
             buf = Data()
         }
         return tsReq
     }
 
-    /// Estimate the total DER length of the TSRequest at the start of `buf`.
-    /// Parse the top-level SEQUENCE header to get total length.
-    private static func estimateTSRequestLength(_ buf: Data) -> Int {
+    /// Parse the DER length at the start of a SEQUENCE (0x30) and return total bytes.
+    private static func estimateDERTotalLength(_ buf: Data) -> Int {
         guard buf.count >= 2 else { return 0 }
         guard buf[0] == 0x30 else { return 0 }
-        var offset = 1
-        let firstLen = Int(buf[offset])
-        offset += 1
+        var off = 1
+        let lenByte = Int(buf[off])
+        off += 1
+        if lenByte < 0x80 {
+            // Short form: total = tag(1) + len(1) + content
+            return off + lenByte
+        }
+        // Long form
+        let numBytes = lenByte & 0x7F
+        guard numBytes > 0 && off + numBytes <= buf.count else { return 0 }
         var contentLen = 0
-        if firstLen < 0x80 {
-            contentLen = firstLen
-            return offset + contentLen
-        }
-        let numBytes = firstLen & 0x7F
-        guard offset + numBytes <= buf.count else { return 0 }
-        contentLen = 0
         for i in 0..<numBytes {
-            contentLen = (contentLen << 8) | Int(buf[offset + i])
+            contentLen = (contentLen << 8) | Int(buf[off + i])
         }
-        return offset + numBytes + contentLen
-    }
-
-    private func estimateTSRequestLength(_ buf: Data) -> Int {
-        return MockRDPHost.estimateTSRequestLength(buf)
+        return off + numBytes + contentLen
     }
 
     private func buildNLAChallenge(from tsReq: TSRequest) -> (serverChallenge: Data, targetInfo: Data, challengeTS: Data) {

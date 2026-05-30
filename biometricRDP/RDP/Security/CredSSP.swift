@@ -246,53 +246,66 @@ enum CredSSP {
     }
 
     private static func parseNegoTokens(_ data: Data, dataLen: Int) -> [Data]? {
-        // NegoData is a SEQUENCE of SEQUENCE { negoToken [0] OCTET_STRING }
+        // negoTokens content is: SEQUENCE OF NegoData
+        // where NegoData ::= SEQUENCE { negoToken [0] OCTET_STRING }
+        //
+        // Structure:
+        //   30 <len>                       <- outer SEQUENCE (OF)
+        //     30 <len>                     <- NegoData SEQUENCE
+        //       A0 <len>                   <- [0] context-specific
+        //         04 <len> <data>          <- OCTET_STRING (the NTLM message)
+        //     30 <len>                     <- another NegoData
+        //       A0 <len>
+        //         04 <len> <data>
+
         var offset = 0
         var tokens: [Data] = []
 
-        while offset < dataLen {
-            guard offset < dataLen, data[offset] == tagSequence else { break }
-            guard let (seqLen, seqContentOff) = parseLength(data, offset: offset + 1, dataLen: dataLen) else { break }
-            let seqEnd = seqContentOff + seqLen
-            guard seqEnd <= dataLen else { break }
+        // Parse the outer SEQUENCE (SEQUENCE OF)
+        guard offset < dataLen, data[offset] == tagSequence else {
+            return nil
+        }
+        guard let (outerLen, outerContentOff) = parseLength(data, offset: offset + 1, dataLen: dataLen) else {
+            return nil
+        }
+        let outerEnd = outerContentOff + outerLen
+        guard outerEnd <= dataLen else { return nil }
 
-            // Parse each NegoData entry inside the outer SEQUENCE
-            var innerOff = seqContentOff
-            while innerOff < seqEnd {
-                guard innerOff < dataLen else { break }
-                var tag = data[innerOff]
-                let innerDataOff = innerOff + 1
-                guard let (innerLenInit, innerOff2) = parseLength(data, offset: innerDataOff, dataLen: seqEnd) else { break }
-                var innerContentOff = innerOff2
-                var innerLen = innerLenInit
+        // Iterate over NegoData entries inside the outer SEQUENCE
+        offset = outerContentOff
+        while offset < outerEnd {
+            // Each NegoData is: SEQUENCE { [0] OCTET_STRING }
+            guard offset < outerEnd, data[offset] == tagSequence else { break }
+            guard let (negoLen, negoContentOff) = parseLength(data, offset: offset + 1, dataLen: outerEnd) else { break }
+            let negoEnd = negoContentOff + negoLen
+            guard negoEnd <= outerEnd else { break }
 
-                // NegoData ::= SEQUENCE { negoToken [0] OCTET_STRING }
-                if tag == tagSequence {
-                    // Unwrap the inner SEQUENCE to find [0] OCTET_STRING inside
-                    innerOff = innerContentOff
+            // Inside NegoData, find [0] OCTET_STRING
+            var innerOff = negoContentOff
+            while innerOff < negoEnd {
+                guard innerOff < outerEnd else { break }
+                let tag = data[innerOff]
+                guard let (tagLen, tagContentOff) = parseLength(data, offset: innerOff + 1, dataLen: negoEnd) else { break }
+                let tagEnd = tagContentOff + tagLen
+                guard tagEnd <= negoEnd else { break }
+
+                if tag == 0xA0 {
+                    // [0] context-specific — its content should be an OCTET_STRING
+                    let octOff = tagContentOff
+                    guard octOff < negoEnd else { break }
+                    guard data[octOff] == tagOctetString else { break }
+                    guard let (octLen, octDataOff) = parseLength(data, offset: octOff + 1, dataLen: negoEnd) else { break }
+                    let octEnd = octDataOff + octLen
+                    guard octEnd <= negoEnd else { break }
+                    tokens.append(data.subdata(in: octDataOff..<octEnd))
+                    innerOff = tagEnd
                     continue
                 }
 
-                if tag == 0xA0 {
-                    // Context-specific [0] — unwrap
-                    guard innerContentOff < dataLen else { break }
-                    tag = data[innerContentOff]
-                    innerContentOff += 1
-                    // Re-parse length for OCTET_STRING
-                    guard let (octLen, octOff) = parseLength(data, offset: innerContentOff, dataLen: seqEnd) else { break }
-                    innerLen = octLen
-                    innerContentOff = octOff
-                }
-
-                if tag == tagOctetString || tag == 0x04 {
-                    let finalContent = data.subdata(in: innerContentOff..<(innerContentOff + innerLen))
-                    tokens.append(finalContent)
-                }
-
-                innerOff = innerContentOff + innerLen
+                innerOff = tagEnd
             }
 
-            offset = seqEnd
+            offset = negoEnd
         }
 
         return tokens

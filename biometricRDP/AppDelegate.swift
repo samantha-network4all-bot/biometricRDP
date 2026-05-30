@@ -38,6 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("AppDelegate: WARNING - failed to load TLS identity, mock host will not work")
             }
 
+            // Register mock controller routes BEFORE starting the test API server
+            // so that /mock/* routes are available when the port file is written.
+            let mc = MockController()
+            _ = mc.view
+            mockController = mc
+
             do {
                 let server = TestAPIServer()
                 try server.start()
@@ -45,10 +51,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("Failed to start TestAPIServer: \(error)")
             }
-
-            let mc = MockController()
-            _ = mc.view
-            mockController = mc
         }
 
         DispatchQueue.main.async {

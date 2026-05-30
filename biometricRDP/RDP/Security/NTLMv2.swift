@@ -85,9 +85,11 @@ enum NTLMv2 {
         guard data.count >= 28 else { return nil }
         let challenge = data.subdata(in: 24..<32)
 
-        // TargetInfo length + offset
-        let targetInfoOffset = Int(readLE32(data: data, offset: 40))
-        let targetInfoLen = Int(readLE16(data: data, offset: 44))
+        // TargetInfo fields: Len(2) at offset 40, MaxLen(2) at offset 42, BufferOffset(4) at offset 44
+        let targetInfoLen = Int(readLE16(data: data, offset: 40))
+        let targetInfoMaxLen = Int(readLE16(data: data, offset: 42))
+        let targetInfoOffset = Int(readLE32(data: data, offset: 44))
+        _ = targetInfoMaxLen
 
         var targetInfo = Data()
         if targetInfoLen > 0 && targetInfoOffset + targetInfoLen <= data.count && targetInfoOffset >= 0 {
@@ -300,14 +302,32 @@ enum NTLMv2 {
         // ntProofStr is first 16 bytes
         let receivedProof = ntRespData.subdata(in: 0..<16)
 
-        // Compute expected: NTOWFv2 = HMAC-MD5(NTOWFv1, Unicode(UpperCase(UserName) || UserDomain))
-        // For verify, use empty domain (matching client behavior when no domain is provided)
+        // Parse the AUTHENTICATE to find the domain and user for NTOWFv2
+        // DomainName fields: Len=offset 12, BufferOffset=offset 16
+        // UserName fields: Len=offset 28, BufferOffset=offset 32
+        let domainLen = Int(readLE16(data: data, offset: 12))
+        let domainOffset = Int(readLE32(data: data, offset: 16))
+        let userLen = Int(readLE16(data: data, offset: 28))
+        let userOffset = Int(readLE32(data: data, offset: 32))
+
+        var domainStr = ""
+        var userStr = ""
+        if domainLen > 0 && domainOffset + domainLen <= data.count {
+            let domainData = data.subdata(in: domainOffset..<(domainOffset + domainLen))
+            domainStr = String(data: domainData, encoding: .utf16LittleEndian) ?? ""
+        }
+        if userLen > 0 && userOffset + userLen <= data.count {
+            let userData = data.subdata(in: userOffset..<(userOffset + userLen))
+            userStr = String(data: userData, encoding: .utf16LittleEndian) ?? ""
+        }
+
+        // NTOWFv2 = HMAC-MD5(NTOWFv1, Unicode(UpperCase(UserName) || UserDomain))
         let passwordData = password.data(using: .utf16LittleEndian) ?? Data()
         let ntHash = MD4.md4(passwordData)
-        let userDomain = username.uppercased().data(using: .utf16LittleEndian) ?? Data()
-        let ntProofKey = hmacMD5(key: ntHash, data: userDomain)
+        let ntProofKey = hmacMD5(key: ntHash,
+                                  data: (userStr.uppercased() + domainStr.uppercased()).data(using: .utf16LittleEndian) ?? Data())
 
-        // The blob starts after 16-byte proof + 1 reserved byte
+        // The blob starts after the 16-byte ntProofStr
         let blob = ntRespData.subdata(in: 16..<ntRespData.count)
 
         let expectedProof = hmacMD5(key: ntProofKey, data: blob)
@@ -315,7 +335,7 @@ enum NTLMv2 {
         if receivedProof != expectedProof {
             NSLog("  recvProof=\(receivedProof.map{String(format:"%02x",$0)}.joined())")
             NSLog("  expProof=\(expectedProof.map{String(format:"%02x",$0)}.joined())")
-            NSLog("  username=\(username) blobCount=\(blob.count)")
+            NSLog("  user=\(userStr) domain=\(domainStr) blobCount=\(blob.count)")
         }
 
         return receivedProof == expectedProof
