@@ -53,8 +53,20 @@ final class RDPSession {
                 // TLS (handled by NetworkTransport; state reflects post-TLS)
                 self.state = .tls
 
-                // NLA (CredSSP + NTLMv2) — happens over TLS before X.224
-                if nla && !username.isEmpty {
+                // X.224 — send CR with PROTOCOL_HYBRID requested
+                self.state = .x224
+                let crData = X224.buildConnectionRequest()
+                try self.transport.send(crData)
+                let ccData = try self.transport.recv(minLength: 1, maxLength: 65536)
+                guard let negotiatedProto = X224.parseConnectionConfirm(ccData) else {
+                    self.state = .failed
+                    self.errorReason = "X.224: connection rejected (got \(ccData.count) bytes)"
+                    return
+                }
+
+                // NLA (CredSSP + NTLMv2) — only if server negotiated PROTOCOL_HYBRID (0x01)
+                let supportsNLA = (negotiatedProto & 0x01) != 0
+                if nla && !username.isEmpty && supportsNLA {
                     do {
                         self.state = .nla
                         try NLA.performNLA(transport: self.transport,
@@ -67,17 +79,8 @@ final class RDPSession {
                         semaphore.signal()
                         return
                     }
-                }
-
-                // X.224 — send CR with PROTOCOL_HYBRID requested
-                self.state = .x224
-                try self.transport.send(X224.buildConnectionRequest())
-                let ccData = try self.transport.recv(minLength: 1, maxLength: 65536)
-                guard X224.parseConnectionConfirm(ccData) != nil else {
-                    self.state = .failed
-                    self.errorReason = "X.224: connection rejected"
-                    semaphore.signal()
-                    return
+                } else if supportsNLA {
+                    self.security = "tls+nla"
                 }
 
                 // MCS

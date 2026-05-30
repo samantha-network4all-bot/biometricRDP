@@ -36,13 +36,15 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
                 return .badRequest("invalid body")
             }
             do {
+                let tlsIdentity = AppDelegate.shared?.tlsIdentity
                 try self.mockHost.start(
                     nla: body.nla,
                     username: body.username,
                     password: body.password,
                     width: body.width,
                     height: body.height,
-                    bpp: body.bpp)
+                    bpp: body.bpp,
+                    tlsIdentity: tlsIdentity)
             } catch {
                 return .badRequest("start failed: \(error.localizedDescription)")
             }

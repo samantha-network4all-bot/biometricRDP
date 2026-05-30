@@ -279,7 +279,9 @@ enum NTLMv2 {
     /// recompute the expected response and compare ntProofStr.
     static func verifyAuthenticate(data: Data, username: String, password: String,
                                     challenge: Data, targetInfo: Data) -> Bool {
-        guard data.count >= 64 else { return false }
+        guard data.count >= 64 else {
+            return false
+        }
         guard data[0] == 0x4E && data[1] == 0x54 && data[2] == 0x4C &&
               data[3] == 0x4D && data[4] == 0x53 && data[5] == 0x53 &&
               data[6] == 0x50 && data[7] == 0x00 else { return false }
@@ -305,10 +307,16 @@ enum NTLMv2 {
         let userDomain = username.uppercased().data(using: .utf16LittleEndian) ?? Data()
         let ntProofKey = hmacMD5(key: ntHash, data: userDomain)
 
-        // The blob starts at byte 17 within the NTLMv2 response (after 16-byte proof + 1 reserved byte)
+        // The blob starts after 16-byte proof + 1 reserved byte
         let blob = ntRespData.subdata(in: 16..<ntRespData.count)
 
         let expectedProof = hmacMD5(key: ntProofKey, data: blob)
+
+        if receivedProof != expectedProof {
+            NSLog("  recvProof=\(receivedProof.map{String(format:"%02x",$0)}.joined())")
+            NSLog("  expProof=\(expectedProof.map{String(format:"%02x",$0)}.joined())")
+            NSLog("  username=\(username) blobCount=\(blob.count)")
+        }
 
         return receivedProof == expectedProof
     }

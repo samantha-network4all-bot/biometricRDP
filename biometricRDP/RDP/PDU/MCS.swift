@@ -102,7 +102,18 @@ enum MCS {
     }
 
     private static func wrapInTPKT(payload: Data) -> Data {
-        let x224Hdr: [UInt8] = [UInt8(2 + payload.count), 0xF0, 0x80]
+        // X.224 data TPDU header: LI + 0xF0 + 0x80
+        let x224PayloadLen = 2 + payload.count
+        let li: UInt8
+        if x224PayloadLen <= 255 {
+            li = UInt8(x224PayloadLen)
+        } else {
+            // Payload exceeds single-byte LI max (255).
+            // This shouldn't happen for well-formed RDP packets in a mock context.
+            // Truncate LI to 255; the TPKT length field contains the actual packet size.
+            li = 0xFF
+        }
+        let x224Hdr: [UInt8] = [li, 0xF0, 0x80]
         let tpktLen = 4 + x224Hdr.count + payload.count
         let tpkt: [UInt8] = [0x03, 0x00, UInt8((tpktLen >> 8) & 0xFF), UInt8(tpktLen & 0xFF)]
         var packet = Data(tpkt)

@@ -10,6 +10,8 @@ final class TestAPIServer {
     func start() throws {
         let params = NWParameters.tcp
         listener = try NWListener(using: params, on: .any)
+        var listenerReady = false
+
         listener?.newConnectionHandler = { [weak self] conn in
             self?.handle(conn)
         }
@@ -18,25 +20,37 @@ final class TestAPIServer {
             case .ready:
                 if let port = self?.listener?.port, port != .any {
                     self?.writePortFile(port)
+                    listenerReady = true
                 }
             case .failed(let err):
                 NSLog("TestAPIServer failed: \(err)")
+                listenerReady = true
             default:
                 break
             }
         }
         listener?.start(queue: queue)
 
+        // Wait for listener to be ready without blocking the calling thread.
+        // Use a timer on the same queue to check port availability.
+        let sema = DispatchSemaphore(value: 0)
+        let checkSource = DispatchSource.makeTimerSource(queue: queue)
+        checkSource.schedule(deadline: .now(), repeating: .milliseconds(10))
         var attempts = 0
-        while (listener?.port ?? .any) == .any && attempts < 200 {
-            Thread.sleep(forTimeInterval: 0.01)
-            attempts += 1
+        checkSource.setEventHandler { [weak self] in
+            if let p = self?.listener?.port, p != .any {
+                self?.writePortFile(p)
+                sema.signal()
+            } else if attempts >= 200 {
+                NSLog("TestAPIServer: listener did not get a port")
+                sema.signal()
+            } else {
+                attempts += 1
+            }
         }
-        if let port = listener?.port, port != .any {
-            writePortFile(port)
-        } else {
-            NSLog("TestAPIServer: listener did not get a port")
-        }
+        checkSource.resume()
+        _ = sema.wait(timeout: .now() + 5.0)
+        checkSource.cancel()
     }
 
     private func writePortFile(_ port: NWEndpoint.Port) {

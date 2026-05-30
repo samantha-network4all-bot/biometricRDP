@@ -158,13 +158,16 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
                 let height: Int
                 let bpp: Int
                 let security: String
+                let errorReason: String
             }
             let body = Body(state: self.state.rawValue,
                             host: self.currentHost,
                             width: self.width,
                             height: self.height,
                             bpp: self.bpp,
-                            security: self.security)
+                            security: self.security,
+                            errorReason: self.rdpSession?.errorReason ?? ""
+            )
             let data = try! JSONEncoder().encode(body)
             return .ok(json: data)
         }

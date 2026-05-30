@@ -166,7 +166,9 @@ enum Capabilities {
     }
 
     private static func wrapInTPKT(content: Data) -> Data {
-        let x224Hdr: [UInt8] = [UInt8(2 + content.count), 0xF0, 0x80]
+        let x224PayloadLen = 2 + content.count
+        let li: UInt8 = x224PayloadLen <= 255 ? UInt8(x224PayloadLen) : 0xFF
+        let x224Hdr: [UInt8] = [li, 0xF0, 0x80]
         let tpktLen = 4 + x224Hdr.count + content.count
         let tpkt: [UInt8] = [
             0x03, 0x00,

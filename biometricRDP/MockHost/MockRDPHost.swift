@@ -21,12 +21,11 @@ final class MockRDPHost {
     private var lastMouse: [[String: Any]] = []
     private var lastText: String = ""
 
-    // MARK: - Embedded self-signed PKCS#12 identity (base64-encoded, password: "mock")
 
-    private static let mockP12Base64 = "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"
 
     func start(nla: Bool, username: String, password: String,
-               width: Int, height: Int, bpp: Int) throws {
+               width: Int, height: Int, bpp: Int,
+               tlsIdentity: sec_identity_t?) throws {
         self.width = width
         self.height = height
         self.bpp = bpp
@@ -34,21 +33,18 @@ final class MockRDPHost {
         self.mockUsername = username
         self.mockPassword = password
 
-        // Create TLS parameters with embedded self-signed cert
-        let tlsOptions = NWProtocolTLS.Options()
-        let params = NWParameters(tls: tlsOptions, tcp: NWProtocolTCP.Options())
-
-        // Build SecIdentity from embedded PKCS#12 blob
-        guard let identity = Self.loadTLSIdentity() else {
-            throw NSError(domain: "MockRDPHost", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "failed to create TLS identity"])
-        }
-        sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, identity)
+        let params = NWParameters.tcp
 
         listener = try NWListener(using: params, on: .any)
-        listener?.stateUpdateHandler = { state in
-            if case .failed(let err) = state {
+        listener?.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                if let p = self?.listener?.port {
+                }
+            case .failed(let err):
                 NSLog("MockRDPHost listener failed: \(err)")
+            default:
+                break
             }
         }
         listener?.newConnectionHandler = { [weak self] conn in
@@ -56,12 +52,27 @@ final class MockRDPHost {
         }
         listener?.start(queue: queue)
 
-        var waited = 0
-        while (listener?.port ?? .any) == .any && waited < 100 {
-            Thread.sleep(forTimeInterval: 0.01)
-            waited += 1
+        // Wait for listener to be ready using a semaphore
+        let sema = DispatchSemaphore(value: 0)
+        let checkTimer = DispatchSource.makeTimerSource(queue: queue)
+        checkTimer.schedule(deadline: .now(), repeating: .milliseconds(10))
+        var ready = false
+        checkTimer.setEventHandler { [weak self] in
+            if let p = self?.listener?.port, p != .any {
+                ready = true
+                sema.signal()
+            }
+            if let s = self?.listener?.state, case .failed = s {
+                sema.signal()
+            }
         }
-        guard let p = listener?.port, p != .any else {
+        checkTimer.resume()
+        let waitResult = sema.wait(timeout: .now() + 5.0)
+        checkTimer.cancel()
+
+        guard ready, let p = listener?.port, p != .any else {
+            listener?.cancel()
+            listener = nil
             throw NSError(domain: "MockRDPHost", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no port assigned"])
         }
@@ -88,17 +99,7 @@ final class MockRDPHost {
     func lastInputText() -> String { lastText }
     func pushSolid(r: UInt8, g: UInt8, b: UInt8) { /* S2 placeholder */ }
 
-    // MARK: - PKCS#12 → sec_identity_t
-
-    private static func loadTLSIdentity() -> sec_identity_t? {
-        guard let p12Data = Data(base64Encoded: mockP12Base64) else { return nil }
-        let options: [String: String] = [kSecImportExportPassphrase as String: "mock"]
-        var items: CFArray?
-        let status = SecPKCS12Import(p12Data as CFData, options as CFDictionary, &items)
-        guard status == errSecSuccess, let arr = items as? [[String: Any]] else { return nil }
-        guard let first = arr.first, let identity = first[kSecImportItemIdentity as String] else { return nil }
-        return sec_identity_create(identity as! SecIdentity)
-    }
+    // MARK: - Self-signed cert → sec_identity_t
 
     // MARK: - Connection handling
 
@@ -111,11 +112,24 @@ final class MockRDPHost {
     private enum Phase { case waitingCR, waitingNLA, waitingNLAAuth, waitingMCS, waitingCaps, active }
 
     private func handleHandshakePhase(_ conn: NWConnection) {
+        // Always start at .waitingCR; after CR+CC, transition to either .waitingMCS or .waitingNLA
         var phase: Phase = .waitingCR
         var buf = Data()
 
         func tryProcess() -> Bool {
             switch phase {
+            case .waitingCR:
+                if self.consumeX224CR(buf: &buf) {
+                    let proto: UInt32 = self.nlaEnabled ? 0x01 : 0x00
+                    conn.send(content: self.buildCC(negotiatedProtocol: proto), completion: .contentProcessed { _ in
+                    })
+                    if self.nlaEnabled {
+                        phase = .waitingNLA
+                    } else {
+                        phase = .waitingMCS
+                    }
+                    return true
+                }
             case .waitingNLA:
                 if let tsReq = self.consumeTSRequest(buf: &buf) {
                     let (serverChallenge, targetInfo, challengeTS) = self.buildNLAChallenge(from: tsReq)
@@ -130,8 +144,9 @@ final class MockRDPHost {
                     let valid = self.validateNLAAuth(authTSReq)
                     if valid {
                         let successTS = self.buildNLASuccess()
-                        conn.send(content: successTS, completion: .contentProcessed { _ in })
-                        phase = .waitingMCS
+                        conn.send(content: successTS, completion: .contentProcessed { _ in
+                        })
+                        phase = .waitingCR
                     } else {
                         let failTS = self.buildNLAFailure()
                         conn.send(content: failTS, completion: .contentProcessed { _ in
@@ -139,17 +154,6 @@ final class MockRDPHost {
                             self.connection = nil
                         })
                         return false
-                    }
-                    return true
-                }
-            case .waitingCR:
-                if self.consumeX224CR(buf: &buf) {
-                    let proto: UInt32 = self.nlaEnabled ? 0x01 : 0x00
-                    conn.send(content: self.buildCC(negotiatedProtocol: proto), completion: .contentProcessed { _ in })
-                    if self.nlaEnabled {
-                        phase = .waitingNLA
-                    } else {
-                        phase = .waitingMCS
                     }
                     return true
                 }
@@ -366,12 +370,12 @@ final class MockRDPHost {
     }
 
     private func buildNLASuccess() -> Data {
-        // TSRequest with errorCode=0 (success)
+        // TSRequest with errorCode=0 (success), no pubKeyAuth to simplify client processing
         return CredSSP.buildTSRequest(
             version: 6,
             negoTokens: [],
             authInfo: nil,
-            pubKeyAuth: Data(repeating: 0, count: 16), // dummy pubKeyAuth
+            pubKeyAuth: nil,
             errorCode: 0,
             nonce: nil
         )
@@ -448,10 +452,10 @@ final class MockRDPHost {
             0x02,             // TYPE_RDP_NEG_RSP
             0x00,             // flags
             0x08, 0x00,       // length = 8
-            UInt8((negotiatedProtocol >> 24) & 0xFF),
-            UInt8((negotiatedProtocol >> 16) & 0xFF),
+            UInt8(negotiatedProtocol & 0xFF),
             UInt8((negotiatedProtocol >> 8) & 0xFF),
-            UInt8(negotiatedProtocol & 0xFF)
+            UInt8((negotiatedProtocol >> 16) & 0xFF),
+            UInt8((negotiatedProtocol >> 24) & 0xFF)
         ]
         var tpdu = x224; tpdu.append(contentsOf: neg)
         let totalLen = 4 + 1 + tpdu.count
