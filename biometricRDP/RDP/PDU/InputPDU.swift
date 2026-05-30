@@ -1,6 +1,12 @@
 import Foundation
 
 enum InputPDU {
+    static let PTRFLAGS_DOWN: UInt16    = 0x8000
+    static let PTRFLAGS_BUTTON1: UInt16 = 0x1000
+    static let PTRFLAGS_BUTTON2: UInt16 = 0x2000
+    static let PTRFLAGS_BUTTON3: UInt16 = 0x4000
+    static let PTRFLAGS_MOVE: UInt16    = 0x0800
+    static let PTRFLAGS_WHEEL: UInt16   = 0x0200
     /// Build a slow-path input event TS_INPUT_PDU containing a single mouse event.
     static func buildMouseEvent(destX: Int, destY: Int, flags: UInt16) -> Data {
         // TS_INPUT_EVENT: eventTime(4) + messageType(2) + slowPathInputData

@@ -24,7 +24,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             guard let self, let sc = self.sessionController else { return .notFound }
             guard let session = sc.rdpSession,
                   case .active = session.state else {
-                return .badRequest("not active")
+                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
             }
             struct MouseBody: Decodable {
                 let x: Int
