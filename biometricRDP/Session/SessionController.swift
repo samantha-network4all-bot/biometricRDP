@@ -37,6 +37,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     override func viewDidLoad() {
         super.viewDidLoad()
         TestAPIRouter.shared.register(controller: self)
+        ensureInputController()
     }
 
     func ensureInputController() {

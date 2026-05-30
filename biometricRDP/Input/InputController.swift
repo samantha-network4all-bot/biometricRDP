@@ -22,10 +22,8 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
     func registerRoutes(on router: TestAPIRouter) {
         router.post(prefix: Self.routePrefix, path: "/mouse") { [weak self] req in
             guard let self, let sc = self.sessionController else { return .notFound }
-            guard let session = sc.value(forKey: "rdpSession") as? RDPSession else {
-                return .badRequest("no session")
-            }
-            guard case .active = session.state else {
+            guard let session = sc.value(forKey: "rdpSession") as? RDPSession,
+                  case .active = session.state else {
                 return .badRequest("not active")
             }
             struct MouseBody: Decodable {
