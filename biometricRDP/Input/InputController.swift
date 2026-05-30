@@ -22,7 +22,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
     func registerRoutes(on router: TestAPIRouter) {
         router.post(prefix: Self.routePrefix, path: "/mouse") { [weak self] req in
             guard let self, let sc = self.sessionController else { return .notFound }
-            guard let session = sc.value(forKey: "rdpSession") as? RDPSession,
+            guard let session = sc.rdpSession,
                   case .active = session.state else {
                 return .badRequest("not active")
             }
