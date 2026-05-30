@@ -81,16 +81,21 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             struct TypeBody: Decodable {
                 let text: String
             }
-            // Accept body as: JSON {"text":"..."}, or raw text string
+            // Accept multiple body formats: JSON {"text":"..."}, raw text, or query param.
             let text: String
             if let body = try? JSONDecoder().decode(TypeBody.self, from: req.body), !body.text.isEmpty {
                 text = body.text
             } else if let raw = String(data: req.body, encoding: .utf8) {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.isEmpty {
+                if !trimmed.isEmpty {
+                    text = trimmed
+                } else if let q = req.queryItems.first(where: { $0.name == "text" }), let v = q.value, !v.isEmpty {
+                    text = v
+                } else {
                     return .badRequest("invalid body")
                 }
-                text = trimmed
+            } else if let q = req.queryItems.first(where: { $0.name == "text" }), let v = q.value, !v.isEmpty {
+                text = v
             } else {
                 return .badRequest("invalid body")
             }

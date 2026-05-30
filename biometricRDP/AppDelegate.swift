@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // so that /mock/* routes are available when the port file is written.
             let mc = MockController()
             _ = mc.view
+            mc.sessionController = wc.sessionController
             mockController = mc
 
             do {

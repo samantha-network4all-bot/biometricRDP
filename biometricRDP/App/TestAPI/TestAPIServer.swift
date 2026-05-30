@@ -188,12 +188,28 @@ struct HTTPRequestParser {
         if let clHeader = headers["Content-Length"] {
             contentLength = Int(clHeader) ?? 0
         }
-        let headerText = lines[0..<min(i, lines.count)].joined(separator: "\r\n")
-        let headerBytes = headerText.data(using: .utf8)?.count ?? 0
-        let bodyStart = headerBytes + 2
+        // Find the blank line that separates headers from body
+        var headerEndIndex = 0
+        var blankLineFound = false
+        var pos = 0
+        while pos < data.count - 3 {
+            if data[pos] == 0x0D && data[pos+1] == 0x0A && data[pos+2] == 0x0D && data[pos+3] == 0x0A {
+                headerEndIndex = pos + 4
+                blankLineFound = true
+                break
+            }
+            pos += 1
+        }
         let body: Data
-        if contentLength > 0 && data.count >= bodyStart + contentLength {
-            body = data.subdata(in: bodyStart..<(bodyStart + contentLength))
+        if contentLength > 0 {
+            if blankLineFound && data.count >= headerEndIndex + contentLength {
+                body = data.subdata(in: headerEndIndex..<(headerEndIndex + contentLength))
+            } else {
+                body = Data()
+            }
+        } else if blankLineFound && data.count > headerEndIndex {
+            // No Content-Length: treat everything after headers as body
+            body = data.subdata(in: headerEndIndex..<data.count)
         } else {
             body = Data()
         }

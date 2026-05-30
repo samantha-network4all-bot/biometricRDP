@@ -8,7 +8,7 @@ final class WindowController: NSViewController, TestAPIControllerRoutes {
     var rdpWindow: RDPWindow?
 
     private var rootView: RootView!
-    private var sessionController: SessionController!
+    var sessionController: SessionController!
 
     init() {
         super.init(nibName: nil, bundle: nil)

@@ -5,6 +5,7 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
     static var routePrefix: String { "mock" }
 
     let mockHost = MockRDPHost()
+    weak var sessionController: SessionController?
 
     init() {
         super.init(nibName: nil, bundle: nil)
@@ -60,6 +61,8 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
 
         router.post(prefix: Self.routePrefix, path: "/stop") { [weak self] _ in
             guard let self else { return .notFound }
+            self.sessionController?.rdpSession?.disconnect()
+            self.sessionController?.state = .disconnected
             self.mockHost.stop()
             return .ok(json: Data(#"{"ok":true}"#.utf8))
         }
