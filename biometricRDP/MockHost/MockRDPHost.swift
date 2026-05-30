@@ -123,11 +123,11 @@ final class MockRDPHost {
         guard buf[0] == 0x03 else { return false }
         let tpktLen = (Int(buf[2]) << 8) | Int(buf[3])
         guard tpktLen >= 7 else { return false }
+        guard tpktLen <= buf.count else { return false } // must be complete
         let li = buf[4]
         guard li >= 5 else { return false }
         guard buf[5] == 0xE0 else { return false }
-        let consume = min(tpktLen, buf.count)
-        buf = Data(buf.dropFirst(consume))
+        buf = Data(buf.dropFirst(tpktLen))
         return true
     }
 
@@ -136,36 +136,36 @@ final class MockRDPHost {
         guard buf[0] == 0x03 else { return false }
         let tpktLen = (Int(buf[2]) << 8) | Int(buf[3])
         guard tpktLen >= 7 else { return false }
+        guard tpktLen <= buf.count else { return false } // must be complete
         guard buf[4] >= 2 else { return false }
         guard (buf[5] & 0xF0) == 0xF0 else { return false }
         let mcsStart = 7
         guard mcsStart < buf.count, buf[mcsStart] == 0x61 else { return false }
-        let consume = min(tpktLen, buf.count)
-        buf = Data(buf.dropFirst(consume))
+        buf = Data(buf.dropFirst(tpktLen))
         return true
     }
 
     private func consumeCapabilities(buf: inout Data) -> Bool {
+        // Must have at least one complete TPKT + X.224 data PDU
         guard buf.count >= 7 else { return false }
         guard buf[0] == 0x03 else { return false }
-        let tpktLen = (Int(buf[2]) << 8) | Int(buf[3])
-        guard tpktLen >= 7 else { return false }
-        guard buf[4] >= 2 else { return false }
-        // Consume all pending data PDUs
+        // Count how many complete TPKT packets are in the buffer
         var offset = 0
+        var completePackets = 0
         while offset + 4 <= buf.count {
-            if buf[offset] != 0x03 { break }
+            guard buf[offset] == 0x03 else { break }
             let thisLen = (Int(buf[offset + 2]) << 8) | Int(buf[offset + 3])
-            if thisLen < 7 { break }
-            let end = min(thisLen, buf.count - offset)
-            offset += end
-            if end < thisLen { break }
+            guard thisLen >= 7 else { break }
+            guard offset + thisLen <= buf.count else { break } // must be complete
+            // Verify X.224 data TPDU: LI >= 2, type 0xF0
+            guard buf[offset + 4] >= 2 else { break }
+            guard (buf[offset + 5] & 0xF0) == 0xF0 else { break }
+            offset += thisLen
+            completePackets += 1
         }
-        if offset > 0 {
-            buf = Data(buf.dropFirst(offset))
-            return true
-        }
-        return false
+        guard completePackets > 0 else { return false }
+        buf = Data(buf.dropFirst(offset))
+        return true
     }
 
     // MARK: - PDU builders

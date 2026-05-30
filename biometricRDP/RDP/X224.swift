@@ -58,12 +58,12 @@ enum X224 {
 
         // Parse variable parts: iterate looking for TYPE_RDP_NEG_RSP (0x02) or TYPE_RDP_NEG_FAILURE (0x03)
         // RDP X.224 negotiation variable item format:
-        //   type(1) + flags(1) + length(2) + data(length-4)
+        //   type(1) + flags(1) + length(2, little-endian) + data(length-4)
         // length field = total item size including 4-byte header
         while offset + 7 <= data.count {
             let type = data[offset]
             _ = data[offset + 1] // flags
-            let length = (Int(data[offset + 2]) << 8) | Int(data[offset + 3])
+            let length = Int(data[offset + 2]) | (Int(data[offset + 3]) << 8)
             guard length >= 8 else { break }
             guard offset + length <= data.count else { break }
             if type == 0x02 { // TYPE_RDP_NEG_RSP
