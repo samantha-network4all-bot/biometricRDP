@@ -11,7 +11,9 @@ final class DesktopView: NSView {
         dirtyRect.fill()
 
         guard let fb = framebuffer else { return }
-        guard let rep = fb.cgImage.flatMap({ NSBitmapImageRep(cgImage: $0) }) else { return }
+        let view = FramebufferView(fb: fb)
+        guard let img = view.cgImage else { return }
+        let rep = NSBitmapImageRep(cgImage: img)
         rep.draw(in: bounds)
     }
 }

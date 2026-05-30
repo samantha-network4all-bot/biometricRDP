@@ -97,7 +97,86 @@ final class MockRDPHost {
     func lastInputKeys() -> [[String: Any]] { lastKeys }
     func lastInputMouse() -> [[String: Any]] { lastMouse }
     func lastInputText() -> String { lastText }
-    func pushSolid(r: UInt8, g: UInt8, b: UInt8) { /* S2 placeholder */ }
+    func pushSolid(r: UInt8, g: UInt8, b: UInt8) {
+        guard let conn = connection else { return }
+
+        // Build raw BGR bitmap data for the full width×height rectangle
+        let bytesPerPixel = bpp / 8
+        let rowStride = width * bytesPerPixel
+        let paddedRowStride = ((rowStride + 3) / 4) * 4 // 4-byte aligned
+        var bitmapData = Data(count: paddedRowStride * height)
+
+        // Fill with solid color in BGR format
+        for y in 0..<height {
+            let rowStart = y * paddedRowStride
+            for x in 0..<width {
+                let pixelOff = rowStart + x * bytesPerPixel
+                if bytesPerPixel == 4 {
+                    bitmapData[pixelOff]     = b  // B
+                    bitmapData[pixelOff + 1] = g  // G
+                    bitmapData[pixelOff + 2] = r  // R
+                    bitmapData[pixelOff + 3] = 0  // unused
+                } else if bytesPerPixel == 3 {
+                    bitmapData[pixelOff]     = b
+                    bitmapData[pixelOff + 1] = g
+                    bitmapData[pixelOff + 2] = r
+                } else if bytesPerPixel == 2 {
+                    // RGB565
+                    let r5 = (r >> 3) & 0x1F
+                    let g6 = (g >> 2) & 0x3F
+                    let b5 = (b >> 3) & 0x1F
+                    let pixel565 = (r5 << 11) | (g6 << 5) | b5
+                    bitmapData[pixelOff]     = UInt8(pixel565 & 0xFF)
+                    bitmapData[pixelOff + 1] = UInt8((pixel565 >> 8) & 0xFF)
+                }
+            }
+        }
+
+        // Build TS_BITMAP_DATA (slow-path)
+        let destLeft: UInt16 = 0
+        let destTop: UInt16 = 0
+        let destRight: UInt16 = UInt16(width - 1)
+        let destBottom: UInt16 = UInt16(height - 1)
+        let w: UInt16 = UInt16(width)
+        let h: UInt16 = UInt16(height)
+        let bppVal: UInt16 = UInt16(bpp)
+        let flags: UInt16 = 0x0001 // BITMAP_COMPRESSION (we use raw, but some clients expect this)
+        // Actually for raw uncompressed, flags should be 0
+        let rawFlags: UInt16 = 0
+        let bitmapDataLen: UInt16 = UInt16(bitmapData.count)
+
+        var bitmapBody = Data()
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: destLeft.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: destTop.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: destRight.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: destBottom.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: w.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: h.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: bppVal.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: rawFlags.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: withUnsafeBytes(of: bitmapDataLen.littleEndian) { Array($0) })
+        bitmapBody.append(contentsOf: bitmapData)
+
+        // TS_UPDATE_DATA: updateType=UPDATETYPE_BITMAP(1), numRects=1
+        var updateBody = Data()
+        updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(0x0001).littleEndian) { Array($0) })
+        updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
+        updateBody.append(contentsOf: bitmapBody)
+
+        // Share Data Header: totalLen(2) + pduType(2) + pduSource(2)
+        let pduType2: UInt16 = 0x0002 | 0x0010 // PDUTYPE2_UPDATE | PDUTYPE2_BITMAP
+        let pduSource: UInt16 = 0x03E9
+        let shareDataLen = 6 + 4 + updateBody.count // header(6) + updateType+numRects(4) + bitmapBody
+        var shareData = Data()
+        shareData.append(contentsOf: withUnsafeBytes(of: UInt16(shareDataLen).littleEndian) { Array($0) })
+        shareData.append(contentsOf: withUnsafeBytes(of: pduType2.littleEndian) { Array($0) })
+        shareData.append(contentsOf: withUnsafeBytes(of: pduSource.littleEndian) { Array($0) })
+        shareData.append(contentsOf: updateBody)
+
+        // Wrap in TPKT + X.224
+        let packet = wrapTPKT(payload: shareData)
+        conn.send(content: packet, completion: .contentProcessed { _ in })
+    }
 
     // MARK: - Self-signed cert → sec_identity_t
 

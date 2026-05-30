@@ -18,21 +18,11 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     var bpp: Int = 0
     var security: String = ""
 
-    private let framebuffer: Framebuffer
     private weak var desktopView: DesktopView?
     private var rdpSession: RDPSession?
 
-    // Store last connect response for async delivery
-    private var lastConnectOK = false
-    private var lastConnectState = ""
-    private var lastConnectWidth = 0
-    private var lastConnectHeight = 0
-    private var lastConnectBPP = 0
-
     init(desktopView: DesktopView) {
-        self.framebuffer = Framebuffer(width: 1, height: 1)
         self.desktopView = desktopView
-        desktopView.framebuffer = framebuffer
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -91,12 +81,8 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             self.currentPort = UInt16(connectPort)
             self.state = .connecting
 
-            // Resize framebuffer
-            self.framebuffer.width = body.width
-            self.framebuffer.height = body.height
-            self.framebuffer.pixels = [UInt8](repeating: 0,
-                count: body.width * body.height * 4)
-            self.desktopView?.framebuffer = self.framebuffer
+            // Point desktop view at session's framebuffer
+            self.desktopView?.framebuffer = session.framebuffer
             self.desktopView?.needsDisplay = true
 
             session.connect(
@@ -185,7 +171,11 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
 
         router.get(prefix: Self.routePrefix, path: "/screenshot") { [weak self] _ in
             guard let self else { return .notFound }
-            guard let png = self.framebuffer.pngData() else {
+            guard let fb = self.rdpSession?.framebuffer else {
+                return .internalError
+            }
+            let view = FramebufferView(fb: fb)
+            guard let png = view.pngData() else {
                 return .internalError
             }
             return .ok(data: png, contentType: "image/png")
@@ -209,13 +199,14 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     }
 
     private func pixelColor(x: Int, y: Int) -> String {
-        guard x >= 0, x < framebuffer.width, y >= 0, y < framebuffer.height else {
+        guard let fb = rdpSession?.framebuffer else { return "#000000" }
+        guard x >= 0, x < fb.width, y >= 0, y < fb.height else {
             return "#000000"
         }
-        let offset = (y * framebuffer.width + x) * 4
-        let r = framebuffer.pixels[offset]
-        let g = framebuffer.pixels[offset + 1]
-        let b = framebuffer.pixels[offset + 2]
+        let offset = (y * fb.width + x) * 4
+        let r = fb.pixels[offset]
+        let g = fb.pixels[offset + 1]
+        let b = fb.pixels[offset + 2]
         return String(format: "#%02X%02X%02X", r, g, b)
     }
 }
