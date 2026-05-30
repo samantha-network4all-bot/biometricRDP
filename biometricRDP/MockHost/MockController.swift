@@ -4,7 +4,7 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
 
     static var routePrefix: String { "mock" }
 
-    private let mockHost = MockRDPHost()
+    let mockHost = MockRDPHost()
 
     init() {
         super.init(nibName: nil, bundle: nil)

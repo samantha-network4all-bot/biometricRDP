@@ -1,65 +1,7 @@
 import Foundation
 import Network
-import Security
 
 final class MockRDPHost {
-    static func generateSelfSignedIdentity() -> SecIdentity? {
-        var attrs: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeySizeInBits as String: 2048
-        ]
-        var error: Unmanaged<CFError>?
-        guard let privateKey = SecKeyCreateRandomKey(attrs as CFDictionary, &error) else {
-            return nil
-        }
-        guard let pubKey = SecKeyCopyPublicKey(privateKey) else {
-            return nil
-        }
-
-        var cfErr: Unmanaged<CFError>?
-        guard let pubData = SecKeyCopyExternalRepresentation(pubKey, &cfErr) as Data? else {
-            return nil
-        }
-
-        // Build a DER-encoded self-signed X.509 certificate
-        guard let certData = Self.buildSelfSignedCertDER(pubKeyData: pubData),
-              !certData.isEmpty else {
-            return nil
-        }
-
-        guard let cert = SecCertificateCreateWithData(nil, certData as CFData) else {
-            return nil
-        }
-
-        var identity: SecIdentity?
-        let status = SecIdentityCreateWithCertificate(nil, cert, &identity)
-        guard status == errSecSuccess else { return nil }
-        return identity
-    }
-
-    /// Build a minimal DER-encoded self-signed v3 RSA-SHA256 certificate.
-    private static func buildSelfSignedCertDER(pubKeyData: Data) -> Data? {
-        // We'll use a simpler approach: create the cert using
-        // a property list that SecCertificateCreateWithData can accept.
-        // Actually SecCertificateCreateWithData only takes DER/PEM.
-        // Let's use a PEM-encoded cert instead.
-        guard let certPEM = Self.buildSelfSignedCertPEM(pubKeyData: pubKeyData) else {
-            return nil
-        }
-        // Convert PEM to DER by base64-decoding the body
-        var lines = certPEM.components(separatedBy: "\n")
-        lines.removeAll { $0.hasPrefix("-----") || $0.isEmpty }
-        guard let der = Data(base64Encoded: lines.joined()) else { return nil }
-        return der
-    }
-
-    /// Build a PEM-encoded self-signed certificate using CommonCrypto to sign.
-    private static func buildSelfSignedCertPEM(pubKeyData: Data) -> String? {
-        // For S2 the cert doesn't need to be valid for real TLS handshake
-        // testing (S2 probes don't RDP-connect to the mock).
-        // Return nil here — the mock host still works without an identity.
-        return nil
-    }
 
     // MARK: - Instance state
 
@@ -95,7 +37,7 @@ final class MockRDPHost {
         listener?.start(queue: queue)
 
         var waited = 0
-        while (listener?.port ?? .any) == .any, waited < 100 {
+        while (listener?.port ?? .any) == .any && waited < 100 {
             Thread.sleep(forTimeInterval: 0.01)
             waited += 1
         }
@@ -130,10 +72,39 @@ final class MockRDPHost {
     func lastInputText() -> String { lastText }
     func pushSolid(r: UInt8, g: UInt8, b: UInt8) { /* S2 placeholder */ }
 
+    // MARK: - Connection handling
+
     private func handleConnection(_ conn: NWConnection) {
         connection = conn
         conn.start(queue: queue)
-        drainConnection(conn)
+
+        // Perform X.224 handshake
+        handleHandshake(conn)
+    }
+
+    private func handleHandshake(_ conn: NWConnection) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, _ in
+            guard let self else { return }
+            guard let data = data, !data.isEmpty else {
+                if isComplete {
+                    conn.cancel()
+                    self.connection = nil
+                }
+                return
+            }
+
+            // Check if we got a valid X.224 CR
+            if self.isConnectionRequest(data) {
+                // Send X.224 CC
+                let cc = self.buildConnectionConfirm()
+                conn.send(content: cc, completion: .contentProcessed { _ in })
+            }
+
+            // Continue draining
+            if !isComplete {
+                self.drainConnection(conn)
+            }
+        }
     }
 
     private func drainConnection(_ conn: NWConnection) {
@@ -153,5 +124,51 @@ final class MockRDPHost {
 
     private func processIncoming(_ data: Data) {
         // S2 placeholder: real RDP input parsing deferred to later slices.
+    }
+
+    // MARK: - X.224
+
+    private func isConnectionRequest(_ data: Data) -> Bool {
+        // TPKT: version=3, reserved=0, length(2); LI >= 5; CR=0xE0
+        guard data.count >= 11 else { return false }
+        guard data[0] == 0x03 else { return false }
+        let li = data[4]
+        guard li >= 5 else { return false }
+        let tpduCode = data[5]
+        return tpduCode == 0xE0 // CR
+    }
+
+    private func buildConnectionConfirm() -> Data {
+        // X.224 CC-TPDU
+        let x224: [UInt8] = [
+            0xD0, // CC code
+            0x00, 0x00, // DST-REF
+            0x00, 0x00, // SRC-REF
+            0x00  // CLASS 0
+        ]
+
+        // RDP Negotiation Response: type=0x02, protocols=0 (standard RDP security)
+        let rdpNegRsp: [UInt8] = [
+            0x02, // TYPE_RDP_NEG_RSP
+            0x00, // flags
+            0x08, 0x00, // length = 8
+            0x00, 0x00, 0x00, 0x00  // selected protocol = 0 (standard RDP)
+        ]
+
+        var tpdu = x224
+        tpdu.append(contentsOf: rdpNegRsp)
+
+        // TPKT header
+        let totalLen = 4 + 1 + tpdu.count
+        let tpkt: [UInt8] = [
+            0x03, 0x00,
+            UInt8((totalLen >> 8) & 0xFF),
+            UInt8(totalLen & 0xFF)
+        ]
+
+        var packet = tpkt
+        packet.append(UInt8(1 + tpdu.count)) // LI
+        packet.append(contentsOf: tpdu)
+        return Data(packet)
     }
 }
