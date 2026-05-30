@@ -3,8 +3,6 @@ import Network
 
 final class MockRDPHost {
 
-    // MARK: - Instance state
-
     private(set) var port: NWEndpoint.Port = .any
     var width: Int = 1280
     var height: Int = 800
@@ -24,7 +22,6 @@ final class MockRDPHost {
         self.bpp = bpp
 
         let params = NWParameters.tcp
-
         listener = try NWListener(using: params, on: .any)
         listener?.stateUpdateHandler = { state in
             if case .failed(let err) = state {
@@ -48,13 +45,8 @@ final class MockRDPHost {
         self.port = p
     }
 
-    var isRunning: Bool {
-        return listener != nil
-    }
-
-    var hasClientConnected: Bool {
-        return connection != nil
-    }
+    var isRunning: Bool { listener != nil }
+    var hasClientConnected: Bool { connection != nil }
 
     func stop() {
         connection?.cancel()
@@ -77,98 +69,211 @@ final class MockRDPHost {
     private func handleConnection(_ conn: NWConnection) {
         connection = conn
         conn.start(queue: queue)
-
-        // Perform X.224 handshake
-        handleHandshake(conn)
+        handleHandshakePhase(conn)
     }
 
-    private func handleHandshake(_ conn: NWConnection) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, _ in
-            guard let self else { return }
-            guard let data = data, !data.isEmpty else {
-                if isComplete {
-                    conn.cancel()
-                    self.connection = nil
+    private enum Phase { case waitingCR, waitingMCS, waitingCaps, active }
+
+    private func handleHandshakePhase(_ conn: NWConnection) {
+        var phase: Phase = .waitingCR
+        var buf = Data()
+
+        func readNext() {
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, _ in
+                guard let self else { return }
+                if let d = data, !d.isEmpty { buf.append(d) }
+
+                switch phase {
+                case .waitingCR:
+                    if self.consumeX224CR(buf: &buf) {
+                        conn.send(content: self.buildCC(), completion: .contentProcessed { _ in })
+                        phase = .waitingMCS
+                    }
+                case .waitingMCS:
+                    if self.consumeMCSConnect(buf: &buf) {
+                        conn.send(content: self.buildMCSResponse(), completion: .contentProcessed { _ in })
+                        phase = .waitingCaps
+                    }
+                case .waitingCaps:
+                    if self.consumeCapabilities(buf: &buf) {
+                        conn.send(content: self.buildDemandActive(), completion: .contentProcessed { _ in })
+                        phase = .active
+                    }
+                case .active:
+                    if isComplete { conn.cancel(); self.connection = nil; return }
+                    buf = Data()
+                    readNext()
+                    return
                 }
-                return
-            }
 
-            // Check if we got a valid X.224 CR
-            if self.isConnectionRequest(data) {
-                // Send X.224 CC
-                let cc = self.buildConnectionConfirm()
-                conn.send(content: cc, completion: .contentProcessed { _ in })
-            }
-
-            // Continue draining
-            if !isComplete {
-                self.drainConnection(conn)
+                if isComplete {
+                    if phase != .active { conn.cancel(); self.connection = nil }
+                    return
+                }
+                readNext()
             }
         }
+        readNext()
     }
 
-    private func drainConnection(_ conn: NWConnection) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) {
-            [weak self] data, _, isComplete, _ in
-            if let data = data, !data.isEmpty {
-                self?.processIncoming(data)
-            }
-            if isComplete {
-                conn.cancel()
-                self?.connection = nil
-                return
-            }
-            self?.drainConnection(conn)
-        }
-    }
+    // MARK: - PDU consumers
 
-    private func processIncoming(_ data: Data) {
-        // S2 placeholder: real RDP input parsing deferred to later slices.
-    }
-
-    // MARK: - X.224
-
-    private func isConnectionRequest(_ data: Data) -> Bool {
-        // TPKT: version=3, reserved=0, length(2); LI >= 5; CR=0xE0
-        guard data.count >= 11 else { return false }
-        guard data[0] == 0x03 else { return false }
-        let li = data[4]
+    private func consumeX224CR(buf: inout Data) -> Bool {
+        guard buf.count >= 11 else { return false }
+        guard buf[0] == 0x03 else { return false }
+        let tpktLen = (Int(buf[2]) << 8) | Int(buf[3])
+        guard tpktLen >= 7 else { return false }
+        let li = buf[4]
         guard li >= 5 else { return false }
-        let tpduCode = data[5]
-        return tpduCode == 0xE0 // CR
+        guard buf[5] == 0xE0 else { return false }
+        let consume = min(tpktLen, buf.count)
+        buf = Data(buf.dropFirst(consume))
+        return true
     }
 
-    private func buildConnectionConfirm() -> Data {
-        // X.224 CC-TPDU
-        let x224: [UInt8] = [
-            0xD0, // CC code
-            0x00, 0x00, // DST-REF
-            0x00, 0x00, // SRC-REF
-            0x00  // CLASS 0
-        ]
+    private func consumeMCSConnect(buf: inout Data) -> Bool {
+        guard buf.count >= 11 else { return false }
+        guard buf[0] == 0x03 else { return false }
+        let tpktLen = (Int(buf[2]) << 8) | Int(buf[3])
+        guard tpktLen >= 7 else { return false }
+        guard buf[4] >= 2 else { return false }
+        guard (buf[5] & 0xF0) == 0xF0 else { return false }
+        let mcsStart = 7
+        guard mcsStart < buf.count, buf[mcsStart] == 0x61 else { return false }
+        let consume = min(tpktLen, buf.count)
+        buf = Data(buf.dropFirst(consume))
+        return true
+    }
 
-        // RDP Negotiation Response: type=0x02, protocols=0 (standard RDP security)
-        let rdpNegRsp: [UInt8] = [
-            0x02, // TYPE_RDP_NEG_RSP
-            0x00, // flags
-            0x08, 0x00, // length = 8
-            0x00, 0x00, 0x00, 0x00  // selected protocol = 0 (standard RDP)
-        ]
+    private func consumeCapabilities(buf: inout Data) -> Bool {
+        guard buf.count >= 7 else { return false }
+        guard buf[0] == 0x03 else { return false }
+        let tpktLen = (Int(buf[2]) << 8) | Int(buf[3])
+        guard tpktLen >= 7 else { return false }
+        guard buf[4] >= 2 else { return false }
+        // Consume all pending data PDUs
+        var offset = 0
+        while offset + 4 <= buf.count {
+            if buf[offset] != 0x03 { break }
+            let thisLen = (Int(buf[offset + 2]) << 8) | Int(buf[offset + 3])
+            if thisLen < 7 { break }
+            let end = min(thisLen, buf.count - offset)
+            offset += end
+            if end < thisLen { break }
+        }
+        if offset > 0 {
+            buf = Data(buf.dropFirst(offset))
+            return true
+        }
+        return false
+    }
 
-        var tpdu = x224
-        tpdu.append(contentsOf: rdpNegRsp)
+    // MARK: - PDU builders
 
-        // TPKT header
+    private func buildCC() -> Data {
+        let x224: [UInt8] = [0xD0, 0x00, 0x00, 0x00, 0x00, 0x00]
+        let neg: [UInt8] = [0x02, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]
+        var tpdu = x224; tpdu.append(contentsOf: neg)
         let totalLen = 4 + 1 + tpdu.count
-        let tpkt: [UInt8] = [
-            0x03, 0x00,
-            UInt8((totalLen >> 8) & 0xFF),
-            UInt8(totalLen & 0xFF)
-        ]
+        let tpkt: [UInt8] = [0x03, 0x00, UInt8((totalLen >> 8) & 0xFF), UInt8(totalLen & 0xFF)]
+        var pkt = Data(tpkt)
+        pkt.append(UInt8(1 + tpdu.count))
+        pkt.append(contentsOf: tpdu)
+        return pkt
+    }
 
-        var packet = tpkt
-        packet.append(UInt8(1 + tpdu.count)) // LI
-        packet.append(contentsOf: tpdu)
-        return Data(packet)
+    private func buildMCSResponse() -> Data {
+        // MCS Connect Response BER [APPLICATION 102]
+        let result: [UInt8] = [0xA0, 0x01, 0x00] // success
+        let connectId = Data([0x02, 0x01, 0x00])
+        let domainParams = buildDomainParams()
+        let gccRsp = buildGCCResponse()
+        let userData = berOctetString(gccRsp)
+        let seq = Data(result) + connectId + domainParams + userData
+        let mcsBER = berWrap(tag: 0x62, content: seq)
+        return wrapTPKT(payload: mcsBER)
+    }
+
+    private func buildDomainParams() -> Data {
+        let fields = [berInt(34), berInt(3), berInt(0), berInt(1),
+                      berInt(0), berInt(1), berInt(65535), berInt(2)]
+        return berSequence(fields.reduce(Data()) { $0 + $1 })
+    }
+
+    private func buildGCCResponse() -> Data {
+        // Minimal GCC Conference Create Response
+        return Data([
+            0x00, 0x14, 0x00, 0x00, // H.221 non-std key
+            0x0C, 0x19, // ConnectPDU
+            0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x14, 0x79, 0x70,
+            0x04, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00
+        ])
+    }
+
+    private func buildDemandActive() -> Data {
+        let shareID: UInt32 = 0x03EA03EA
+        var body = Data()
+        body.append(contentsOf: withUnsafeBytes(of: shareID.littleEndian) { Array($0) })
+        body.append(contentsOf: [0x04, 0x00]) // lengthSource
+        body.append(contentsOf: [0x00, 0x00]) // combinedCapLen placeholder
+        body.append(contentsOf: [0x01, 0x00]) // numCaps
+        body.append(contentsOf: Array("RDP ".utf8))
+        // General capability set
+        body.append(contentsOf: [0x01, 0x00, 0x18, 0x00])
+        body.append(contentsOf: [0x01, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x00])
+        body.append(contentsOf: [0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00])
+        body.append(contentsOf: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        body.append(0x00) // pad
+        let ccLen = body.count - 8
+        body[10] = UInt8(ccLen & 0xFF)
+        body[11] = UInt8((ccLen >> 8) & 0xFF)
+
+        let pduSource: UInt16 = 0x03E9
+        let totalLen = 6 + 4 + body.count
+        var sc = Data()
+        sc.append(UInt8(totalLen & 0xFF))
+        sc.append(UInt8((totalLen >> 8) & 0xFF))
+        sc.append(0x11) // PDUTYPE2_DEMANDACTIVE
+        sc.append(UInt8(pduSource & 0xFF))
+        sc.append(UInt8((pduSource >> 8) & 0xFF))
+        sc.append(0x01) // streamID
+        sc.append(UInt8((body.count + 12) & 0xFF))
+        sc.append(UInt8(((body.count + 12) >> 8) & 0xFF))
+        sc.append(0x11) // pduType2
+        sc.append(0x00) // compression
+
+        return wrapTPKT(payload: sc + body)
+    }
+
+    // MARK: - BER helpers
+
+    private func berWrap(tag: UInt8, content: Data) -> Data {
+        var r = Data([tag])
+        r.append(berLength(content.count))
+        r.append(content)
+        return r
+    }
+
+    private func berSequence(_ c: Data) -> Data { berWrap(tag: 0x30, content: c) }
+    private func berOctetString(_ d: Data) -> Data { berWrap(tag: 0x04, content: d) }
+    private func berInt(_ v: Int) -> Data {
+        if v >= 0 && v < 128 { return Data([0x02, 0x01, UInt8(v)]) }
+        return Data([0x02, 0x02, UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)])
+    }
+
+    private func berLength(_ n: Int) -> Data {
+        if n < 128 { return Data([UInt8(n)]) }
+        if n <= 0xFF { return Data([0x81, UInt8(n)]) }
+        return Data([0x82, UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)])
+    }
+
+    private func wrapTPKT(payload: Data) -> Data {
+        let hdr: [UInt8] = [UInt8(2 + payload.count), 0xF0, 0x80]
+        let tpktLen = 4 + hdr.count + payload.count
+        let tpkt: [UInt8] = [0x03, 0x00, UInt8((tpktLen >> 8) & 0xFF), UInt8(tpktLen & 0xFF)]
+        var pkt = Data(tpkt)
+        pkt.append(contentsOf: hdr)
+        pkt.append(payload)
+        return pkt
     }
 }

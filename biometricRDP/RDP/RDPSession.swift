@@ -5,6 +5,10 @@ final class RDPSession {
     enum State: String {
         case disconnected
         case connecting
+        case tcp
+        case x224
+        case mcs
+        case capabilities
         case active
         case failed
     }
@@ -20,7 +24,8 @@ final class RDPSession {
     var port: UInt16 = 0
     var security: String = ""
 
-    private static let connectTimeout: TimeInterval = 5.0
+    private static let connectTimeout: TimeInterval = 10.0
+    private var handshakeSemaphore: DispatchSemaphore?
 
     init(transport: Transport) {
         self.transport = transport
@@ -33,6 +38,8 @@ final class RDPSession {
         self.width = width
         self.height = height
         self.bpp = bpp
+        self.security = ""
+        self.errorReason = ""
 
         state = .connecting
         transport.stateChangeHandler = { [weak self] tState in
@@ -49,9 +56,8 @@ final class RDPSession {
         }
 
         let semaphore = DispatchSemaphore(value: 0)
-        var connectErr: Error?
+        self.handshakeSemaphore = semaphore
 
-        // Connect on background thread since transport.connect may block
         DispatchQueue.global().async { [weak self] in
             guard let self else {
                 semaphore.signal()
@@ -60,27 +66,23 @@ final class RDPSession {
             do {
                 try self.transport.connect(host: host, port: port)
             } catch {
-                connectErr = error
                 self.state = .failed
                 self.errorReason = error.localizedDescription
                 semaphore.signal()
                 return
             }
-            self.performHandshake(semaphore: semaphore)
+            self.performHandshake()
         }
 
         let waitResult = semaphore.wait(timeout: .now() + Self.connectTimeout)
         if waitResult == .timedOut {
-            state = .failed
-            errorReason = "connect timeout"
+            if state != .active && state != .failed {
+                state = .failed
+                errorReason = "connect timeout"
+            }
             transport.disconnect()
         }
-        if state == .connecting && connectErr == nil {
-            // transport connected but handshake didn't complete within timeout
-            state = .failed
-            errorReason = "handshake timeout"
-            transport.disconnect()
-        }
+        handshakeSemaphore = nil
     }
 
     func disconnect() {
@@ -89,41 +91,97 @@ final class RDPSession {
         errorReason = ""
     }
 
-    // MARK: - Private
+    // MARK: - Handshake
 
-    private func performHandshake(semaphore: DispatchSemaphore) {
-        // Send X.224 connection request
-        let cr = X224.buildConnectionRequest()
-        transport.send(cr)
+    private func fail(_ reason: String) {
+        state = .failed
+        errorReason = reason
+        handshakeSemaphore?.signal()
+    }
 
-        // Receive connection confirm
-        var handshakeDone = false
+    private func succeed() {
+        state = .active
+        security = "tcp"
+        handshakeSemaphore?.signal()
+    }
+
+    private func performHandshake() {
+        state = .tcp
+        transport.send(X224.buildConnectionRequest())
+
         transport.recv { [weak self] data in
             guard let self else { return }
-            if self.parseConnectionConfirm(data) {
-                self.state = .active
-                self.security = "tcp"
-            } else {
-                self.state = .failed
-                self.errorReason = "invalid connection confirm"
+            guard !data.isEmpty else {
+                self.fail("X.224: empty connection confirm")
+                return
             }
-            handshakeDone = true
-            semaphore.signal()
+            guard X224.parseConnectionConfirm(data) != nil else {
+                self.fail("X.224: invalid connection confirm")
+                return
+            }
+            self.state = .x224
+            self.performMCS()
         }
 
-        // Wait for the recv callback with a timeout
-        // Since our NetworkTransport.recv is async but the mock may respond
-        // synchronously in-process, we need a bounded wait here
         let deadline = DispatchTime.now() + Self.connectTimeout
-        let waitResult = semaphore.wait(timeout: deadline)
-        if waitResult == .timedOut && !handshakeDone {
-            state = .failed
-            errorReason = "handshake receive timeout"
+        let result = handshakeSemaphore?.wait(timeout: deadline)
+        if result == .timedOut && state == .tcp {
+            fail("X.224: receive timeout")
             transport.disconnect()
         }
     }
 
-    private func parseConnectionConfirm(_ data: Data) -> Bool {
-        return X224.parseConnectionConfirm(data) != nil
+    private func performMCS() {
+        transport.send(MCS.buildConnectInitial(width: width, height: height, bpp: bpp))
+
+        transport.recv { [weak self] data in
+            guard let self else { return }
+            guard !data.isEmpty else {
+                self.fail("MCS: empty response")
+                return
+            }
+            guard let mcsResult = MCS.parseConnectResponse(data) else {
+                self.fail("MCS: invalid connect response")
+                return
+            }
+            guard mcsResult.result == 0 else {
+                self.fail("MCS: rejected (result=\(mcsResult.result))")
+                return
+            }
+            self.state = .mcs
+            self.performCapabilities()
+        }
+
+        let deadline = DispatchTime.now() + Self.connectTimeout
+        let result = handshakeSemaphore?.wait(timeout: deadline)
+        if result == .timedOut && state == .mcs {
+            fail("MCS: receive timeout")
+            transport.disconnect()
+        }
+    }
+
+    private func performCapabilities() {
+        transport.send(Capabilities.buildConfirmActivePDU(width: width, height: height, bpp: bpp))
+        transport.send(Capabilities.buildSynchronisePDU())
+        transport.send(Capabilities.buildControlCooperatePDU())
+        transport.send(Capabilities.buildControlRequestPDU())
+        transport.send(Capabilities.buildFontListPDU())
+
+        transport.recv { [weak self] data in
+            guard let self else { return }
+            if !data.isEmpty {
+                self.succeed()
+            } else {
+                self.fail("Capabilities: empty response")
+            }
+        }
+
+        let deadline = DispatchTime.now() + Self.connectTimeout
+        let result = handshakeSemaphore?.wait(timeout: deadline)
+        if result == .timedOut && state == .mcs {
+            state = .capabilities
+            fail("Capabilities: receive timeout")
+            transport.disconnect()
+        }
     }
 }
