@@ -146,7 +146,7 @@ final class MockRDPHost {
                         let successTS = self.buildNLASuccess()
                         conn.send(content: successTS, completion: .contentProcessed { _ in
                         })
-                        phase = .waitingCR
+                        phase = .waitingMCS
                     } else {
                         let failTS = self.buildNLAFailure()
                         conn.send(content: failTS, completion: .contentProcessed { _ in
