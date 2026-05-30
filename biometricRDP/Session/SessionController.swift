@@ -19,7 +19,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     var security: String = ""
 
     private weak var desktopView: DesktopView?
-    private var rdpSession: RDPSession?
+    internal var rdpSession: RDPSession?
 
     init(desktopView: DesktopView) {
         self.desktopView = desktopView
@@ -32,9 +32,18 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
         view = NSView(frame: .zero)
     }
 
+    private var inputController: InputController?
+
     override func viewDidLoad() {
         super.viewDidLoad()
         TestAPIRouter.shared.register(controller: self)
+    }
+
+    func ensureInputController() {
+        guard inputController == nil else { return }
+        let ctrl = InputController(sessionController: self)
+        _ = ctrl.view // load view
+        inputController = ctrl
     }
 
     func registerRoutes(on router: TestAPIRouter) {
@@ -120,6 +129,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             guard let data = try? JSONSerialization.data(withJSONObject: resp) else {
                 return .internalError
             }
+            self.ensureInputController()
             return .ok(json: data)
         }
 

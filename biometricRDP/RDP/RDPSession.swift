@@ -19,7 +19,7 @@ final class RDPSession {
     var errorReason: String = ""
     private let stateLock = NSLock()
 
-    var transport: Transport
+    internal var transport: Transport
     var width: Int = 0
     var height: Int = 0
     var bpp: Int = 0
@@ -238,5 +238,10 @@ final class RDPSession {
         transport.close()
         setState(.disconnected)
         errorReason = ""
+    }
+
+    func sendInput(_ data: Data) throws {
+        guard state == .active else { throw TransportError.notConnected }
+        try transport.send(data)
     }
 }
