@@ -12,7 +12,6 @@ final class NetworkTransport: Transport {
 
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "rdp-network-transport")
-    private var recvBuffer = Data()
 
     func connect(host: String, port: UInt16) throws {
         let endpoint = NWEndpoint.hostPort(
@@ -50,32 +49,46 @@ final class NetworkTransport: Transport {
         }
     }
 
-    func send(_ data: Data) {
-        guard let conn = connection else { return }
-        conn.send(content: data, completion: .contentProcessed { _ in })
+    func send(_ data: Data) throws {
+        guard let conn = connection else { throw TransportError.notConnected }
+        let semaphore = DispatchSemaphore(value: 0)
+        var sendError: Error?
+        conn.send(content: data, completion: .contentProcessed { err in
+            if let err = err { sendError = err }
+            semaphore.signal()
+        })
+        semaphore.wait()
+        if let err = sendError { throw err }
     }
 
-    func recv(completion: @escaping (Data) -> Void) {
-        guard let conn = connection else { return }
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, _ in
-            guard let self else { return }
-            if let data = data, !data.isEmpty {
-                self.recvBuffer.append(data)
+    func recv(minLength: Int, maxLength: Int) throws -> Data {
+        guard let conn = connection else { throw TransportError.notConnected }
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultData: Data?
+        var recvError: Error?
+
+        conn.receive(minimumIncompleteLength: minLength, maximumLength: maxLength) { data, _, isComplete, err in
+            if let err = err {
+                recvError = err
+            } else if let d = data, !d.isEmpty {
+                resultData = d
+            } else if isComplete {
+                recvError = TransportError.closed
             }
-            if !self.recvBuffer.isEmpty {
-                let chunk = self.recvBuffer
-                self.recvBuffer = Data()
-                completion(chunk)
-            }
-            if !isComplete {
-                self.recv(completion: completion)
-            }
+            semaphore.signal()
         }
+        semaphore.wait()
+
+        if let err = recvError { throw err }
+        guard let data = resultData else {
+            // No data yet but not closed — try once more
+            return try recv(minLength: minLength, maxLength: maxLength)
+        }
+        return data
     }
 
-    func disconnect() {
+    func close() {
         connection?.cancel()
         connection = nil
-        recvBuffer = Data()
     }
 }

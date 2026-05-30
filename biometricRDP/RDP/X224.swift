@@ -57,21 +57,16 @@ enum X224 {
         offset += 5
 
         // Parse variable parts: iterate looking for TYPE_RDP_NEG_RSP (0x02) or TYPE_RDP_NEG_FAILURE (0x03)
+        // RDP X.224 negotiation variable item format:
+        //   type(1) + flags(1) + length(2) + data(length-4)
+        // length field = total item size including 4-byte header
         while offset + 7 <= data.count {
             let type = data[offset]
-            let flags = data[offset + 1]
+            _ = data[offset + 1] // flags
             let length = (Int(data[offset + 2]) << 8) | Int(data[offset + 3])
-            // length includes the 4 type/flags/length bytes themselves? No, in RDP the length field is just payload length after the header
-            // Actually in T.123 the variable items have: type(1) + flags(1) + length(2) + value(length-4)
-            // So total item length = 4 + (length - 4) = length
-            // But the RDP spec says: type(1) flags(1) length(2) data(length)
-            // Let me just be safe: total variable item = 4 + length_value where length_value is the raw field
-            let totalItemLen = 4 + length
-            guard totalItemLen > 4 else { break }
-            guard offset + totalItemLen <= data.count else { break }
+            guard length >= 8 else { break }
+            guard offset + length <= data.count else { break }
             if type == 0x02 { // TYPE_RDP_NEG_RSP
-                let protoLen = length - 4
-                guard protoLen >= 4 else { return nil }
                 let protoBytes = data[(offset + 4)..<(offset + 8)]
                 let proto = protoBytes.enumerated().reduce(UInt32(0)) { acc, el in
                     acc | (UInt32(el.element) << (24 - el.offset * 8))
@@ -79,12 +74,9 @@ enum X224 {
                 return proto
             }
             if type == 0x03 { // TYPE_RDP_NEG_FAILURE
-                let failureCode = (Int(data[offset + 4]) << 24) | (Int(data[offset + 5]) << 16) |
-                                  (Int(data[offset + 6]) << 8)  | Int(data[offset + 7])
-                NSLog("RDP negotiated failure: \(failureCode)")
                 return nil
             }
-            offset += totalItemLen
+            offset += length
         }
         // No negotiation result found — return 0 for direct mode
         return 0
