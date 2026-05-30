@@ -14,11 +14,12 @@ enum X224 {
         ]
 
         // Variable part: RDP Negotiation Request
+        // Include PROTOCOL_HYBRID (0x01 = CredSSP) for NLA support
         let rdpNegReq: [UInt8] = [
             0x01, // TYPE_RDP_NEG_REQ
             0x00, // flags
             0x08, 0x00, // length (8)
-            0x00, 0x00, 0x00, 0x00  // requested protocols (direct-only)
+            0x01, 0x00, 0x00, 0x00  // requested protocols: PROTOCOL_HYBRID (CredSSP/NLA)
         ]
 
         // Assemble TPDU: fixed header + variable items

@@ -7,6 +7,7 @@ final class RDPSession {
         case connecting
         case tcp
         case tls
+        case nla
         case x224
         case mcs
         case capabilities
@@ -51,6 +52,22 @@ final class RDPSession {
 
                 // TLS (handled by NetworkTransport; state reflects post-TLS)
                 self.state = .tls
+
+                // NLA (CredSSP + NTLMv2)
+                if !username.isEmpty {
+                    do {
+                        self.state = .nla
+                        try NLA.performNLA(transport: self.transport,
+                                           username: username,
+                                           password: password)
+                        self.security = "tls+nla"
+                    } catch {
+                        self.state = .failed
+                        self.errorReason = "NLA: \(error.localizedDescription)"
+                        semaphore.signal()
+                        return
+                    }
+                }
 
                 // X.224
                 self.state = .x224

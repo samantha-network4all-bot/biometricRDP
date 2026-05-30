@@ -8,6 +8,10 @@ final class MockRDPHost {
     var width: Int = 1280
     var height: Int = 800
     var bpp: Int = 32
+    private var nlaEnabled: Bool = false
+    private var mockUsername: String = ""
+    private var mockPassword: String = ""
+    private var serverChallengeData: Data = Data()
 
     private var listener: NWListener?
     private var connection: NWConnection?
@@ -25,6 +29,9 @@ final class MockRDPHost {
         self.width = width
         self.height = height
         self.bpp = bpp
+        self.nlaEnabled = nla
+        self.mockUsername = username
+        self.mockPassword = password
 
         // Create TLS parameters with embedded self-signed cert
         let tlsOptions = NWProtocolTLS.Options()
@@ -72,6 +79,7 @@ final class MockRDPHost {
         lastKeys = []
         lastMouse = []
         lastText = ""
+        serverChallengeData = Data()
     }
 
     func lastInputKeys() -> [[String: Any]] { lastKeys }
@@ -99,10 +107,10 @@ final class MockRDPHost {
         handleHandshakePhase(conn)
     }
 
-    private enum Phase { case waitingCR, waitingMCS, waitingCaps, active }
+    private enum Phase { case waitingNLA, waitingNLAAuth, waitingCR, waitingMCS, waitingCaps, active }
 
     private func handleHandshakePhase(_ conn: NWConnection) {
-        var phase: Phase = .waitingCR
+        var phase: Phase = nlaEnabled ? .waitingNLA : .waitingCR
         var buf = Data()
 
         func readNext() {
@@ -111,6 +119,30 @@ final class MockRDPHost {
                 if let d = data, !d.isEmpty { buf.append(d) }
 
                 switch phase {
+                case .waitingNLA:
+                    if let tsReq = self.consumeTSRequest(buf: &buf) {
+                        let (serverChallenge, challengeTS) = self.buildNLAChallenge(from: tsReq)
+                        self.serverChallengeData = serverChallenge
+                        conn.send(content: challengeTS, completion: .contentProcessed { _ in })
+                        // Keep serverChallenge for later validation
+                        phase = .waitingNLAAuth
+                    }
+                case .waitingNLAAuth:
+                    if let authTS = self.consumeTSRequest(buf: &buf) {
+                        let valid = self.validateNLAAuth(authTS, serverChallenge: "placeholder")
+                        if valid {
+                            let successTS = self.buildNLASuccess()
+                            conn.send(content: successTS, completion: .contentProcessed { _ in })
+                            phase = .waitingCR
+                        } else {
+                            let failTS = self.buildNLAFailure()
+                            conn.send(content: failTS, completion: .contentProcessed { _ in
+                                conn.cancel()
+                                self.connection = nil
+                            })
+                            return
+                        }
+                    }
                 case .waitingCR:
                     if self.consumeX224CR(buf: &buf) {
                         conn.send(content: self.buildCC(), completion: .contentProcessed { _ in })
@@ -141,6 +173,185 @@ final class MockRDPHost {
             }
         }
         readNext()
+    }
+
+    // MARK: - PDU consumers
+
+    // MARK: - NLA helpers
+
+    private func consumeTSRequest(buf: inout Data) -> TSRequest? {
+        // We need to find where the DER sequence starts
+        // A TSRequest is a SEQUENCE, so find the first 0x30 and try to parse
+        guard !buf.isEmpty else { return nil }
+
+        // Use CredSSP.parseTSRequest which handles DER
+        guard let tsReq = CredSSP.parseTSRequest(buf) else { return nil }
+
+        // We need to determine how many bytes consumed from buf
+        // Re-encode to figure out consumed length (not perfect but works for testing)
+        // Better: estimate from the data — we know the negoTokens contain the NTLM messages
+        // For simplicity, find the total DER length by re-wrapping
+        let consumed = estimateTSRequestLength(buf)
+        if consumed > 0 && consumed <= buf.count {
+            buf = Data(buf.dropFirst(consumed))
+        } else {
+            // Fallback: consume all we have
+            buf = Data()
+        }
+        return tsReq
+    }
+
+    /// Estimate the total DER length of the TSRequest at the start of `buf`.
+    /// Parse the top-level SEQUENCE header to get total length.
+    private static func estimateTSRequestLength(_ buf: Data) -> Int {
+        guard buf.count >= 2 else { return 0 }
+        guard buf[0] == 0x30 else { return 0 }
+        var offset = 1
+        let firstLen = Int(buf[offset])
+        offset += 1
+        var contentLen = 0
+        if firstLen < 0x80 {
+            contentLen = firstLen
+            return offset + contentLen
+        }
+        let numBytes = firstLen & 0x7F
+        guard offset + numBytes <= buf.count else { return 0 }
+        contentLen = 0
+        for i in 0..<numBytes {
+            contentLen = (contentLen << 8) | Int(buf[offset + i])
+        }
+        return offset + numBytes + contentLen
+    }
+
+    private func estimateTSRequestLength(_ buf: Data) -> Int {
+        return MockRDPHost.estimateTSRequestLength(buf)
+    }
+
+    private func buildNLAChallenge(from tsReq: TSRequest) -> (serverChallenge: Data, challengeTS: Data) {
+        // Generate 8-byte random server challenge
+        var challenge = Data(count: 8)
+        _ = challenge.withUnsafeMutableBytes { ptr in
+            SecRandomCopyBytes(kSecRandomDefault, 8, ptr.baseAddress!)
+        }
+
+        // Build NTLM CHALLENGE message
+        let ntlmChallenge = buildNTLMChallenge(serverChallenge: challenge)
+
+        // Wrap in TSRequest as negoTokens[0]
+        let challengeTS = CredSSP.wrapTSRequest(negoTokens: [ntlmChallenge])
+        return (challenge, challengeTS)
+    }
+
+    private func buildNTLMChallenge(serverChallenge: Data) -> Data {
+        var msg = Data()
+
+        // Signature "NTLMSSP\0"
+        msg.append(contentsOf: [0x4E, 0x54, 0x4C, 0x4D, 0x53, 0x53, 0x50, 0x00])
+
+        // MessageType = 2
+        msg.append(contentsOf: withUnsafeBytes(of: UInt32(2).littleEndian) { Array($0) })
+
+        // TargetName fields (Len=0, MaxLen=0, BufferOffset=56)
+        msg.append(contentsOf: [0x00, 0x00, 0x00, 0x00]) // Len + MaxLen
+        msg.append(contentsOf: withUnsafeBytes(of: UInt32(56).littleEndian) { Array($0) }) // BufferOffset
+
+        // NegotiateFlags
+        let flags: UInt32 = 0x00020201 | 0x00800001 | 0x02000000 | 0x00080000 | 0x00200000 | 0x20000000 | 0x80000000
+        msg.append(contentsOf: withUnsafeBytes(of: flags.littleEndian) { Array($0) })
+
+        // Server challenge (8 bytes)
+        msg.append(contentsOf: serverChallenge)
+
+        // Reserved (8 bytes)
+        msg.append(contentsOf: [UInt8](repeating: 0, count: 8))
+
+        // TargetInfo fields
+        let targetInfo = buildTargetInfo()
+        let targetInfoOffset = 56 + targetInfo.count
+        msg.append(contentsOf: withUnsafeBytes(of: UInt16(targetInfo.count).littleEndian) { Array($0) }) // Len
+        msg.append(contentsOf: withUnsafeBytes(of: UInt16(targetInfo.count).littleEndian) { Array($0) }) // MaxLen
+        msg.append(contentsOf: withUnsafeBytes(of: UInt32(targetInfoOffset).littleEndian) { Array($0) }) // BufferOffset
+
+        // Version (8 bytes)
+        msg.append(contentsOf: [0x0A, 0x00, 0x63, 0x00, 0x00, 0x00, 0x0F, 0x00])
+
+        // TargetName (empty) + TargetInfo
+        msg.append(targetInfo)
+
+        return msg
+    }
+
+    private func buildTargetInfo() -> Data {
+        // Minimal target info with NetBIOS computer name and domain
+        var info = Data()
+        // MsvAvNbComputerName
+        info.append(contentsOf: [0x01, 0x00]) // type
+        let name = "MOCKHOST".data(using: .utf16LittleEndian) ?? Data()
+        info.append(contentsOf: withUnsafeBytes(of: UInt16(name.count).littleEndian) { Array($0) }) // len
+        info.append(name)
+        // MsvAvNbDomainName
+        info.append(contentsOf: [0x02, 0x00]) // type
+        let domain = "WORKGROUP".data(using: .utf16LittleEndian) ?? Data()
+        info.append(contentsOf: withUnsafeBytes(of: UInt16(domain.count).littleEndian) { Array($0) }) // len
+        info.append(domain)
+        // Terminator
+        info.append(contentsOf: [0x00, 0x00, 0x00, 0x00])
+        return info
+    }
+
+    private func validateNLAAuth(_ tsReq: TSRequest, serverChallenge: String) -> Bool {
+        // Extract authInfo from the TSRequest (contains TSCredentials)
+        guard let authInfo = tsReq.authInfo, authInfo.count >= 6 else { return false }
+
+        // Parse TSCredentials from authInfo (simple struct packing)
+        var off = 0
+        guard authInfo.count >= off + 2 else { return false }
+        let domainLen = Int(readLE16(data: authInfo, offset: off))
+        off += 2
+        guard authInfo.count >= off + domainLen else { return false }
+        off += domainLen
+        guard authInfo.count >= off + 2 else { return false }
+        let userLen = Int(readLE16(data: authInfo, offset: off))
+        off += 2
+        guard authInfo.count >= off + userLen else { return false }
+        off += userLen
+        guard authInfo.count >= off + 2 else { return false }
+        let passLen = Int(readLE16(data: authInfo, offset: off))
+        off += 2
+        guard authInfo.count >= off + passLen else { return false }
+        let passData = authInfo.subdata(in: off..<(off + passLen))
+
+        // Compare password (plaintext for test mock)
+        let receivedPassword = String(data: passData, encoding: .utf16LittleEndian) ?? ""
+        return receivedPassword == mockPassword
+    }
+
+    private func readLE16(data: Data, offset: Int) -> UInt16 {
+        guard offset + 1 < data.count else { return 0 }
+        return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    private func buildNLASuccess() -> Data {
+        // TSRequest with errorCode=0 (success)
+        return CredSSP.buildTSRequest(
+            version: 6,
+            negoTokens: [],
+            authInfo: nil,
+            pubKeyAuth: Data(repeating: 0, count: 16), // dummy pubKeyAuth
+            errorCode: 0,
+            nonce: nil
+        )
+    }
+
+    private func buildNLAFailure() -> Data {
+        return CredSSP.buildTSRequest(
+            version: 6,
+            negoTokens: [],
+            authInfo: nil,
+            pubKeyAuth: nil,
+            errorCode: 0xC000006D, // STATUS_LOGON_FAILURE
+            nonce: nil
+        )
     }
 
     // MARK: - PDU consumers
