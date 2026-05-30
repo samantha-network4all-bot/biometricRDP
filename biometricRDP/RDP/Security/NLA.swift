@@ -70,9 +70,9 @@ enum NLA {
         // To compute the MIC we need the session key.
         // Session key = HMAC-MD5(ntProofKey, ntProofStr)
         // We need to extract ntProofStr from the built auth message
-        // The auth message's NTLMv2 response field is at offset 32 in the NTLM header
-        let ntRespOffset = Int(readLE32(data: authMsg, offset: 32))
-        let ntRespLen = Int(readLE16(data: authMsg, offset: 28))
+        // NtChallengeResponse fields: Len=offset 20, BufferOffset=offset 24
+        let ntRespOffset = Int(readLE32(data: authMsg, offset: 24))
+        let ntRespLen = Int(readLE16(data: authMsg, offset: 20))
         guard ntRespOffset + ntRespLen <= authMsg.count else {
             throw NLAError.invalidData
         }

@@ -146,8 +146,8 @@ enum NTLMv2 {
         let flags = negotiateFlags
 
         // We need to calculate the AUTHENTICATE message size and offsets
-        // Fixed header: 64 bytes (through Version)
-        let headerSize = 64
+        // Fixed header: 88 bytes (through MIC at offset 72-87)
+        let headerSize = 88
 
         // We'll build the payload parts after the header
         let lmResponse = Data(repeating: 0, count: 24) // LMv2 response placeholder
@@ -287,9 +287,9 @@ enum NTLMv2 {
         let msgType = readLE32(data: data, offset: 8)
         guard msgType == 3 else { return false }
 
-        // Extract the NTLMv2 response
-        let ntRespLen = Int(readLE16(data: data, offset: 28))
-        let ntRespOffset = Int(readLE32(data: data, offset: 32))
+        // NtChallengeResponse fields: Len=offset 20, BufferOffset=offset 24
+        let ntRespLen = Int(readLE16(data: data, offset: 20))
+        let ntRespOffset = Int(readLE32(data: data, offset: 24))
         guard ntRespOffset + ntRespLen <= data.count else { return false }
 
         let ntRespData = data.subdata(in: ntRespOffset..<(ntRespOffset + ntRespLen))
