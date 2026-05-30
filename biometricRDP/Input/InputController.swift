@@ -32,10 +32,11 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
     func registerRoutes(on router: TestAPIRouter) {
         // ---- /input/key (scancode-based) ----
         router.post(prefix: Self.routePrefix, path: "/key") { [weak self] req in
-            guard let self, let sc = self.sessionController else { return .notFound }
-            guard let session = sc.rdpSession,
+            guard let self else { return .notFound }
+            guard let sc = self.sessionController,
+                  let session = sc.rdpSession,
                   case .active = session.state else {
-                return .badRequest("not active")
+                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
             }
             struct KeyBody: Decodable {
                 let scancode: Int?
@@ -69,20 +70,27 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
 
         // ---- /input/type (unicode text) ----
         router.post(prefix: Self.routePrefix, path: "/type") { [weak self] req in
-            guard let self, let sc = self.sessionController else { return .notFound }
+            guard let self else { return .notFound }
+            guard let sc = self.sessionController else {
+                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
+            }
             guard let session = sc.rdpSession,
                   case .active = session.state else {
-                return .badRequest("not active")
+                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
             }
             struct TypeBody: Decodable {
                 let text: String
             }
-            // Try JSON body first, then fall back to raw text
+            // Accept body as: JSON {"text":"..."}, or raw text string
             let text: String
             if let body = try? JSONDecoder().decode(TypeBody.self, from: req.body), !body.text.isEmpty {
                 text = body.text
-            } else if let raw = String(data: req.body, encoding: .utf8), !raw.isEmpty {
-                text = raw
+            } else if let raw = String(data: req.body, encoding: .utf8) {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    return .badRequest("invalid body")
+                }
+                text = trimmed
             } else {
                 return .badRequest("invalid body")
             }
