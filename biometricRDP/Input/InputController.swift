@@ -68,7 +68,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             }
             let pdu = InputPDU.buildMouseEvent(destX: body.x, destY: body.y, flags: flags)
             do {
-                try session.transport.send(pdu)
+                try session.sendInput(pdu)
             } catch {
                 return .internalError
             }

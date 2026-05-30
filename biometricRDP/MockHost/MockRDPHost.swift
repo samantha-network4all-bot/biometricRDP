@@ -124,7 +124,8 @@ final class MockRDPHost {
         off += 2
         guard off + 6 <= packet.count else { return }
         // Share Control Header: totalLen(2) + pduType2(2) + PDUSource(2)
-        let pduType2 = (Int(packet[off + 1]) << 8) | Int(packet[off])
+        // totalLen at off..off+1 (unused, skip)
+        let pduType2 = (Int(packet[off + 3]) << 8) | Int(packet[off + 2])
         off += 6
         // PDUTYPE2_INPUT = 0x001C ; PDUTYPE2_SYNCHRONISE = 0x1D; we only handle INPUT here
         guard pduType2 == 0x001C, off + 4 <= packet.count else { return }
