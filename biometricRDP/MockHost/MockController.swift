@@ -88,6 +88,8 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
                 let h = body.rect.count > 3 ? body.rect[3] : self.mockHost.height
                 self.mockHost.pushSolid(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
             }
+            // Allow time for the client's background reader to receive and process the bitmap data
+            Thread.sleep(forTimeInterval: 0.15)
             return .ok(json: Data(#"{"ok":true}"#.utf8))
         }
 

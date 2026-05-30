@@ -175,9 +175,19 @@ final class MockRDPHost {
             shareData.append(contentsOf: withUnsafeBytes(of: pduSource.littleEndian) { Array($0) })
             shareData.append(updateBody)
 
-            // Wrap in TPKT + X.224 and send
+            // Wrap in TPKT + X.224 and send synchronously
             let packet = wrapTPKT(payload: shareData)
-            conn.send(content: packet, completion: .contentProcessed { _ in })
+            let sendDone = DispatchSemaphore(value: 0)
+            var sendError: Error?
+            conn.send(content: packet, completion: .contentProcessed { err in
+                sendError = err
+                sendDone.signal()
+            })
+            sendDone.wait()
+            if let err = sendError {
+                NSLog("MockRDPHost pushSolid send error: \(err)")
+                return
+            }
 
             currentRow += stripRows
             remainingRows -= stripRows

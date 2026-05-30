@@ -172,13 +172,18 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
         router.get(prefix: Self.routePrefix, path: "/screenshot") { [weak self] _ in
             guard let self else { return .notFound }
             guard let fb = self.rdpSession?.framebuffer else {
-                return .internalError
+                let body = try! JSONSerialization.data(withJSONObject: ["ok": false, "error": "no session"])
+                return .ok(json: body)
             }
             let view = FramebufferView(fb: fb)
             guard let png = view.pngData() else {
-                return .internalError
+                let body = try! JSONSerialization.data(withJSONObject: ["ok": false, "error": "render failed"])
+                return .ok(json: body)
             }
-            return .ok(data: png, contentType: "image/png")
+            let b64 = png.base64EncodedString()
+            let resp: [String: Any] = ["ok": true, "png": b64]
+            let body = try! JSONSerialization.data(withJSONObject: resp)
+            return .ok(json: body)
         }
     }
 
