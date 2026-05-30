@@ -5,6 +5,16 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
 
     weak var sessionController: SessionController?
 
+    /// USB HID keyboard scancode map (usage page 0x07, codes 0x04–0x1D).
+    private static let keyToScancode: [Character: UInt16] = [
+        "a": 0x04, "b": 0x05, "c": 0x06, "d": 0x07, "e": 0x08,
+        "f": 0x09, "g": 0x0A, "h": 0x0B, "i": 0x0C, "j": 0x0D,
+        "k": 0x0E, "l": 0x0F, "m": 0x10, "n": 0x11, "o": 0x12,
+        "p": 0x13, "q": 0x14, "r": 0x15, "s": 0x16, "t": 0x17,
+        "u": 0x18, "v": 0x19, "w": 0x1A, "x": 0x1B, "y": 0x1C,
+        "z": 0x1D
+    ]
+
     init(sessionController: SessionController) {
         self.sessionController = sessionController
         super.init(nibName: nil, bundle: nil)
@@ -28,13 +38,27 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
                 return .ok(json: Data("{\"error\":\"not active\"}".utf8))
             }
             struct KeyBody: Decodable {
-                let scancode: Int
-                let down: Bool
+                let scancode: Int?
+                let key: String?
+                let down: Bool?
             }
             guard let body = try? JSONDecoder().decode(KeyBody.self, from: req.body) else {
                 return .badRequest("invalid body")
             }
-            let pdu = InputPDU.buildKeyboardEvent(keyCode: UInt16(body.scancode), down: body.down)
+            let scancode: UInt16
+            if let s = body.scancode {
+                scancode = UInt16(s)
+            } else if let k = body.key, let first = k.lowercased().first, let mapped = Self.keyToScancode[first] {
+                scancode = mapped
+            } else {
+                return .badRequest("need scancode or key")
+            }
+            let down = body.down ?? true
+            var flags: UInt16 = 0
+            if !down {
+                flags |= InputPDU.KBDFLAGS_RELEASE
+            }
+            let pdu = InputPDU.buildKeyboardEvent(scancode: scancode, flags: flags)
             do {
                 try session.sendInput(pdu)
             } catch {
@@ -58,11 +82,14 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             }
             for scalar in body.text.unicodeScalars {
                 let code = UInt16(scalar.value)
-                let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code)
-                do {
-                    try session.sendInput(pdu)
-                } catch {
-                    return .internalError
+                // key-down (flags=0x00) then key-up (flags=0x8000)
+                for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
+                    let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code, flags: flags)
+                    do {
+                        try session.sendInput(pdu)
+                    } catch {
+                        return .internalError
+                    }
                 }
             }
             return .ok(json: Data("{\"ok\":true}".utf8))

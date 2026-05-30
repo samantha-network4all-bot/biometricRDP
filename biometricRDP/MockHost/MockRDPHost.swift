@@ -100,15 +100,35 @@ final class MockRDPHost {
     func lastInputMouse() -> [[String: Any]] { lastMouse }
     func lastInputText() -> String { lastText }
 
-    /// Convert a unicode code point to an RDP scancode.
-    /// Used to record unicode input events as key records in lastKeys.
-    private func unicodeToScancode(_ unicode: Int) -> Int {
-        // Map specific unicode code points to the scancodes expected by acceptance probes.
-        // These are the RDP keyboard scancodes the test harness expects.
+    /// Convert a unicode code point to a USB HID scancode (usage page 0x07, codes 0x04–0x1D).
+    private func unicodeToHIDScancode(_ unicode: Int) -> Int {
         switch unicode {
-        case 0x61: return 30 // 'a' → scancode 30 (0x1E)
-        case 0x68: return 35 // 'h' → scancode 35 (0x23)
-        case 0x69: return 11 // 'i' → scancode 11 (0x0B)
+        case 0x61: return 0x04 // 'a'
+        case 0x62: return 0x05 // 'b'
+        case 0x63: return 0x06 // 'c'
+        case 0x64: return 0x07 // 'd'
+        case 0x65: return 0x08 // 'e'
+        case 0x66: return 0x09 // 'f'
+        case 0x67: return 0x0A // 'g'
+        case 0x68: return 0x0B // 'h'
+        case 0x69: return 0x0C // 'i'
+        case 0x6A: return 0x0D // 'j'
+        case 0x6B: return 0x0E // 'k'
+        case 0x6C: return 0x0F // 'l'
+        case 0x6D: return 0x10 // 'm'
+        case 0x6E: return 0x11 // 'n'
+        case 0x6F: return 0x12 // 'o'
+        case 0x70: return 0x13 // 'p'
+        case 0x71: return 0x14 // 'q'
+        case 0x72: return 0x15 // 'r'
+        case 0x73: return 0x16 // 's'
+        case 0x74: return 0x17 // 't'
+        case 0x75: return 0x18 // 'u'
+        case 0x76: return 0x19 // 'v'
+        case 0x77: return 0x1A // 'w'
+        case 0x78: return 0x1B // 'x'
+        case 0x79: return 0x1C // 'y'
+        case 0x7A: return 0x1D // 'z'
         default: return 0
         }
     }
@@ -167,32 +187,37 @@ final class MockRDPHost {
                     else if pointerFlags & 0x2000 != 0 { button = "right" }
                     else if pointerFlags & 0x4000 != 0 { button = "middle" }
                 } else {
-                    // button up
                     if pointerFlags & 0x1000 != 0 { button = "left" }
                     else if pointerFlags & 0x2000 != 0 { button = "right" }
                     else if pointerFlags & 0x4000 != 0 { button = "middle" }
                     action = "up"
                 }
-                // For the client's "click" action, we receive a single down+button PDU.
-                // Map "down" with a button to "click" per acceptance probe expectation.
                 let recordAction = (action == "down") ? "click" : action
                 lastMouse.append(["x": xPos, "y": yPos, "button": button, "action": recordAction])
             } else if messageType == 0x0001, off + 8 <= packet.count {
-                // TS_KEYBOARD_EVENT: keyboardFlags(2) + pad(2) + keyCode(2) + flags(2)
+                // TS_KEYBOARD_EVENT (old-style): keyboardFlags(2) + pad(2) + keyCode(2) + flags(2)
                 let keyboardFlags = (Int(packet[off + 1]) << 8) | Int(packet[off])
                 off += 2 + 2 + 2 + 2
                 let keyCode = (Int(packet[off - 3]) << 8) | Int(packet[off - 4])
                 let down = (keyboardFlags & 0x8000) == 0
                 lastKeys.append(["scancode": keyCode, "down": down])
-            } else if messageType == 0x0002, off + 4 <= packet.count {
-                // TS_UNICODE_KEYBOARD_EVENT: unicodeCode(2) + keyboardFlags(2)
-                let unicodeCode = (Int(packet[off + 1]) << 8) | Int(packet[off])
-                off += 2
+            } else if messageType == 0x0004, off + 6 <= packet.count {
+                // TS_KEYBOARD_EVENT (INPUT_EVENT_SCANCODE): keyboardFlags(2) + keyCode(2) + pad(2)
                 let keyboardFlags = (Int(packet[off + 1]) << 8) | Int(packet[off])
-                off += 2
+                let keyCode = (Int(packet[off + 3]) << 8) | Int(packet[off + 2])
+                off += 6
                 let down = (keyboardFlags & 0x8000) == 0
-                // Convert unicode code point to virtual key scancode
-                let scancode = unicodeToScancode(unicodeCode)
+                lastKeys.append(["scancode": keyCode, "down": down])
+            } else if messageType == 0x0005, off + 4 <= packet.count {
+                // TS_UNICODE_KEYBOARD_EVENT (INPUT_EVENT_UNICODE): unicodeCode(2) + keyboardFlags(2)
+                let unicodeCode = (Int(packet[off + 1]) << 8) | Int(packet[off])
+                let keyboardFlags = (Int(packet[off + 3]) << 8) | Int(packet[off + 2])
+                off += 4
+                let down = (keyboardFlags & 0x8000) == 0
+                if down, let scalar = UnicodeScalar(unicodeCode) {
+                    lastText.append(Character(scalar))
+                }
+                let scancode = unicodeToHIDScancode(unicodeCode)
                 lastKeys.append(["scancode": scancode, "down": down])
             } else {
                 break
