@@ -35,7 +35,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             guard let self, let sc = self.sessionController else { return .notFound }
             guard let session = sc.rdpSession,
                   case .active = session.state else {
-                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
+                return .badRequest("not active")
             }
             struct KeyBody: Decodable {
                 let scancode: Int?
@@ -72,15 +72,21 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             guard let self, let sc = self.sessionController else { return .notFound }
             guard let session = sc.rdpSession,
                   case .active = session.state else {
-                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
+                return .badRequest("not active")
             }
             struct TypeBody: Decodable {
                 let text: String
             }
-            guard let body = try? JSONDecoder().decode(TypeBody.self, from: req.body) else {
+            // Try JSON body first, then fall back to raw text
+            let text: String
+            if let body = try? JSONDecoder().decode(TypeBody.self, from: req.body), !body.text.isEmpty {
+                text = body.text
+            } else if let raw = String(data: req.body, encoding: .utf8), !raw.isEmpty {
+                text = raw
+            } else {
                 return .badRequest("invalid body")
             }
-            for scalar in body.text.unicodeScalars {
+            for scalar in text.unicodeScalars {
                 let code = UInt16(scalar.value)
                 // key-down (flags=0x00) then key-up (flags=0x8000)
                 for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
