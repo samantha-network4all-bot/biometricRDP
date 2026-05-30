@@ -6,7 +6,7 @@ enum X224 {
     static func buildConnectionRequest() -> Data {
         // X.224 Connection Request TPDU (fixed part)
         // CR-TPDU: CR-CDT=0, DST-REF=0, SRC-REF=0, CLASS=0
-        let x224: [UInt8] = [
+        let x224Fixed: [UInt8] = [
             0xE0, // CR code
             0x00, 0x00, // DST-REF
             0x00, 0x00, // SRC-REF
@@ -21,13 +21,18 @@ enum X224 {
             0x00, 0x00, 0x00, 0x00  // requested protocols (direct-only)
         ]
 
-        var tpdu = x224
+        // Assemble TPDU: fixed header + variable items
+        var tpdu = Data(x224Fixed)
         tpdu.append(contentsOf: rdpNegReq)
 
-        // Prepend TPKT header
-        let tpkt = buildTPktHeader(payloadLength: tpdu.count + 7)
-        var packet = tpkt
-        packet.append(7 + UInt8(tpdu.count)) // LI
+        // LI = length of TPDU bytes after the LI byte itself
+        // Fixed part (CODE+DST-REF+SRC-REF+CLASS) = 6 bytes + variable = 8 bytes
+        let li = tpdu.count
+
+        // Build TPKT-wrapped packet
+        let totalLen = 4 /* TPKT header */ + 1 /* LI */ + tpdu.count
+        var packet = buildTPktHeader(payloadLength: totalLen)
+        packet.append(UInt8(li)) // LI
         packet.append(contentsOf: tpdu)
         return Data(packet)
     }
