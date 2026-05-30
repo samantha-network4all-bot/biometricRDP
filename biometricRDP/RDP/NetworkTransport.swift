@@ -99,7 +99,8 @@ final class NetworkTransport: Transport {
 
         if let err = recvError { throw err }
         guard let data = resultData else {
-            // No data yet but not closed — try once more
+            // No data yet but not closed — brief yield then retry
+            Thread.sleep(forTimeInterval: 0.001)
             return try recv(minLength: minLength, maxLength: maxLength)
         }
         return data
