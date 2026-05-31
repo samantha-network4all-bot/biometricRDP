@@ -69,7 +69,7 @@ final class Vault {
 
     func delete(id: String) throws {
         guard isUnlocked else { throw VaultError.notUnlocked }
-        credentials.removeValue(forKey: id)
+        guard credentials.removeValue(forKey: id) != nil else { throw VaultError.notFound }
         try flushToDisk()
     }
 

@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var testAPIServer: TestAPIServer?
     var mockController: MockController?
     var profilesController: ProfilesController?
+    var credentialsController: CredentialsController?
     var tlsIdentity: sec_identity_t?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -54,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Register credentials controller
             let cc = CredentialsController()
             _ = cc.view
+            credentialsController = cc
 
             do {
                 let server = TestAPIServer()
