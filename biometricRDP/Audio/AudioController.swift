@@ -39,11 +39,12 @@ final class AudioController: NSViewController, TestAPIControllerRoutes {
             audioActive = true
             audioFormat = "pcm_s16le_44100"
         case RDPSND.SNDC_WAVE:
-            // PCM data in the wave body: each sample is 2 bytes (16-bit),
-            // stereo = 2 channels, so 4 bytes per frame.
-            // Count total samples (frames * channels).
-            let pcmBytes = msg.body.count
-            samplesReceived += pcmBytes / 2 // 16-bit = 2 bytes per sample
+            // SNDC_WAVE body: wTimeStamp(2) + wFormatNo(2) + bPad(1) + pcmData
+            // PCM data starts at offset 5. 16-bit stereo = 4 bytes/frame.
+            // samplesReceived counts frames (not individual channel samples).
+            guard msg.body.count >= 5 else { break }
+            let pcmBytes = msg.body.count - 5
+            samplesReceived += pcmBytes / 4 // 16-bit stereo = 4 bytes per frame
         case RDPSND.SNDC_TRAINING:
             break
         case RDPSND.SNDC_CLOSE:

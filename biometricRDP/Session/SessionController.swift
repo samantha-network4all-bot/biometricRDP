@@ -113,6 +113,18 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             self.desktopView?.framebuffer = session.framebuffer
             self.desktopView?.needsDisplay = true
 
+            self.ensureInputController()
+            self.ensureClipboardController()
+            self.ensureAudioController()
+            // Wire clipboard handler BEFORE connect so it's ready during handshake
+            session.clipboardMessageHandler = { [weak self] channelData in
+                self?.handleClipboardData(channelData)
+            }
+            // Wire audio handler BEFORE connect so it's ready during handshake
+            session.audioMessageHandler = { [weak self] channelData in
+                self?.audioController?.handleAudioChannelData(channelData)
+            }
+
             session.connect(
                 host: body.host,
                 port: UInt16(connectPort),
@@ -147,16 +159,6 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: resp) else {
                 return .internalError
-            }
-            self.ensureInputController()
-            self.ensureClipboardController()
-            // Wire clipboard handler
-            session.clipboardMessageHandler = { [weak self] channelData in
-                self?.handleClipboardData(channelData)
-            }
-            // Wire audio handler
-            session.audioMessageHandler = { [weak self] channelData in
-                self?.audioController?.handleAudioChannelData(channelData)
             }
             return .ok(json: data)
         }
