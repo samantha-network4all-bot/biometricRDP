@@ -49,15 +49,14 @@ final class ClipboardController: NSViewController, TestAPIControllerRoutes {
             guard let body = try? JSONDecoder().decode(SetBody.self, from: req.body) else {
                 return .badRequest("invalid body")
             }
-            // Send clipboard data to remote via session
+            // Send clipboard data to remote via virtual channel
             guard let sc = self.sessionController,
                   let session = sc.rdpSession,
                   case .active = session.state else {
                 return .ok(json: Data("{\"ok\":true}".utf8))
             }
             let clipData = ClipRDR.buildFormatDataResponse(text: body.text)
-            let dataWithHeader = ClipRDR.buildFormatListResponse()
-            _ = dataWithHeader + clipData
+            try? session.sendVirtualChannel(data: clipData, channelID: session.clipboardChannelID)
             return .ok(json: Data("{\"ok\":true}".utf8))
         }
     }
