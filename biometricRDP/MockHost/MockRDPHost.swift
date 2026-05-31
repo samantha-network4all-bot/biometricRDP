@@ -322,6 +322,121 @@ final class MockRDPHost {
         }
     }
 
+    /// Push a solid-color rectangle encoded with interleaved-RLE.
+    /// Uses 24bpp direct color (BGR, 3 bytes per pixel) for the RLE encoding.
+    /// For a solid rectangle: each row = control byte (runLength-1) + BGR fill + line-done escape.
+    func pushRLEBitmap(r: UInt8, g: UInt8, b: UInt8, x: Int = 0, y: Int = 0,
+                        width: Int = -1, height: Int = -1) {
+        guard let conn = connection else { return }
+
+        let w = width < 0 ? self.width : width
+        let h = height < 0 ? self.height : height
+        let destX = x
+        let destY = y
+
+        guard w > 0, h > 0 else { return }
+
+        let rleBpp = 24 // use 24bpp for RLE encoding
+        let bytesPerPixel = 3 // BGR
+
+        // Each encoded row = 1(control run) + 3(BGR color) + 2(0x00 0x00 line done) = 6 bytes
+        // For rows > 63 pixels, control byte uses extended form: 2(control) + 3(color) + 2(escape) = 7 bytes
+        let rowEncodingBase = 1 + bytesPerPixel + 2 // control + BGR + line-done
+        let maxRowsPerStrip = max(1, (65535 - 6 - 4 - 18) / rowEncodingBase)
+
+        var remainingRows = h
+        var currentRow = 0
+
+        while remainingRows > 0 {
+            let stripRows = min(remainingRows, maxRowsPerStrip)
+            let stripDestY = destY + currentRow
+            let stripDestLeft = UInt16(destX)
+            let stripDestTop = UInt16(stripDestY)
+            let stripDestRight = UInt16(destX + w - 1)
+            let stripDestBottom = UInt16(stripDestY + stripRows - 1)
+            let stripW = UInt16(w)
+            let stripH = UInt16(stripRows)
+            let bppVal = UInt16(rleBpp)
+
+            // Encode RLE data for this strip
+            var rleData = Data()
+            for _ in 0..<stripRows {
+                // Interleaved-RLE run-length: bit 7 = 1 means run mode
+                // bits 0-5 = runLength - 1 (6-bit value, max 63)
+                // bit 6 = extended length flag
+                let runLen = w
+                if runLen <= 64 {
+                    // Single-byte control: 0x80 | (runLen - 1)
+                    rleData.append(UInt8(0x80 | ((runLen - 1) & 0x3F)))
+                    rleData.append(b); rleData.append(g); rleData.append(r) // BGR
+                } else {
+                    // Two-byte run: 0xC0 | ((runLen-1) >> 8), then low byte
+                    let hi = UInt8(0xC0 | (((runLen - 1) >> 8) & 0x3F))
+                    let lo = UInt8((runLen - 1) & 0xFF)
+                    rleData.append(hi)
+                    rleData.append(lo)
+                    rleData.append(b); rleData.append(g); rleData.append(r)
+                }
+                // Line done escape: 0x00 0x00
+                rleData.append(0x00);
+                rleData.append(0x00)
+            }
+            // Bitmap done escape: 0x00 0x01
+            rleData.append(0x00);
+            rleData.append(0x01)
+
+            let bitmapDataLen = UInt16(rleData.count)
+            // BITMAP_COMPRESSION flag = 0x0001
+            let flags: UInt16 = 0x0001
+
+            // TS_BITMAP_DATA
+            var bitmapBody = Data()
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestLeft.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestTop.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestRight.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripDestBottom.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripW.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripH.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: bppVal.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: flags.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: bitmapDataLen.littleEndian) { Array($0) })
+            bitmapBody.append(contentsOf: rleData)
+
+            // TS_UPDATE_DATA: updateType=UPDATETYPE_BITMAP, numRects=1
+            var updateBody = Data()
+            updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(0x0001).littleEndian) { Array($0) })
+            updateBody.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
+            updateBody.append(bitmapBody)
+
+            // Share Data Header
+            let encodedPduType: UInt16 = 0x0002
+            let pduSource: UInt16 = 0x03E9
+            let shareDataLen = 6 + updateBody.count
+            var shareData = Data()
+            shareData.append(contentsOf: withUnsafeBytes(of: UInt16(shareDataLen).littleEndian) { Array($0) })
+            shareData.append(contentsOf: withUnsafeBytes(of: encodedPduType.littleEndian) { Array($0) })
+            shareData.append(contentsOf: withUnsafeBytes(of: pduSource.littleEndian) { Array($0) })
+            shareData.append(updateBody)
+
+            // Wrap in TPKT + X.224 and send synchronously
+            let packet = wrapTPKT(payload: shareData)
+            let sendDone = DispatchSemaphore(value: 0)
+            var sendError: Error?
+            conn.send(content: packet, completion: .contentProcessed { err in
+                sendError = err
+                sendDone.signal()
+            })
+            sendDone.wait()
+            if let err = sendError {
+                NSLog("MockRDPHost pushRLEBitmap send error: \(err)")
+                return
+            }
+
+            currentRow += stripRows
+            remainingRows -= stripRows
+        }
+    }
+
     /// Write a single solid-color pixel into a byte buffer at the given offset.
     private func writeSolidPixel(data: inout Data, offset: Int, bytesPerPixel: Int, r: UInt8, g: UInt8, b: UInt8) {
         if bytesPerPixel == 4 {

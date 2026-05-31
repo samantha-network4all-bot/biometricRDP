@@ -81,15 +81,17 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
             guard let body = try? JSONDecoder().decode(PushBody.self, from: req.body) else {
                 return .badRequest("invalid body")
             }
+            let r = Self.parseHex(body.color, offset: 0)
+            let g = Self.parseHex(body.color, offset: 2)
+            let b = Self.parseHex(body.color, offset: 4)
+            let x = body.rect.count > 0 ? body.rect[0] : 0
+            let y = body.rect.count > 1 ? body.rect[1] : 0
+            let w = body.rect.count > 2 ? body.rect[2] : self.mockHost.width
+            let h = body.rect.count > 3 ? body.rect[3] : self.mockHost.height
             if body.pattern == "solid" {
-                let r = Self.parseHex(body.color, offset: 0)
-                let g = Self.parseHex(body.color, offset: 2)
-                let b = Self.parseHex(body.color, offset: 4)
-                let x = body.rect.count > 0 ? body.rect[0] : 0
-                let y = body.rect.count > 1 ? body.rect[1] : 0
-                let w = body.rect.count > 2 ? body.rect[2] : self.mockHost.width
-                let h = body.rect.count > 3 ? body.rect[3] : self.mockHost.height
                 self.mockHost.pushSolid(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
+            } else if body.pattern == "solid-rle" {
+                self.mockHost.pushRLEBitmap(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
             }
             // Allow time for the client's background reader to receive and process the bitmap data
             Thread.sleep(forTimeInterval: 0.15)
