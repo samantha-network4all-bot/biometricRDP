@@ -798,6 +798,22 @@ final class MockRDPHost {
         done.wait()
     }
 
+    /// Fire-and-forget virtual channel send (no semaphore wait) — safe to call
+    /// inside receive completion handlers where waiting would deadlock.
+    private func sendVirtualChannelNoWait(data: Data, channelID: UInt16, conn: NWConnection) {
+        var pdu = Data()
+        pdu.append(0x64) // SendDataIndication
+        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator
+        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
+        pdu.append(0x00) // priority
+        pdu.append(0x01) // segmentation
+        let lenBytes = berLengthBytes(data.count)
+        pdu.append(contentsOf: lenBytes)
+        pdu.append(data)
+        let packet = wrapTPKT(payload: pdu)
+        conn.send(content: packet, completion: .contentProcessed { _ in })
+    }
+
     func pushClipboard(text: String) {
         clipboardText = text
         guard clipboardActive, let conn = connection else { return }
@@ -887,8 +903,9 @@ final class MockRDPHost {
                     conn.send(content: self.buildDemandActive(), completion: .contentProcessed { _ in })
                     phase = .active
                     // Send audio formats to activate the audio channel
+                    // Use fire-and-forget to avoid deadlock (sendVirtualChannel waits on conn queue)
                     let formatsMsg = RDPSND.buildFormats()
-                    self.sendVirtualChannel(data: formatsMsg, channelID: 0x0011, conn: conn)
+                    self.sendVirtualChannelNoWait(data: formatsMsg, channelID: 0x0011, conn: conn)
                     return true
                 }
             case .active:
