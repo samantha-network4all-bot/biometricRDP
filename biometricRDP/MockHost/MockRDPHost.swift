@@ -1328,10 +1328,10 @@ final class MockRDPHost {
         if x224PayloadLen < 128 {
             x224Hdr.append(UInt8(x224PayloadLen))
         } else {
-            // Extended length: 0x82 + 2-byte LE length
+            // Extended length: 0x82 + 2-byte big-endian length
             x224Hdr.append(0x82)
-            x224Hdr.append(UInt8(x224PayloadLen & 0xFF))
             x224Hdr.append(UInt8((x224PayloadLen >> 8) & 0xFF))
+            x224Hdr.append(UInt8(x224PayloadLen & 0xFF))
         }
         x224Hdr.append(0xF0) // data TPDU
         x224Hdr.append(0x80) // EOT
