@@ -27,9 +27,16 @@ struct RDPFile {
     }
 
     /// Serialize to .rdp format (key:type:value, sorted by key).
+    /// Keys containing a space sort before keys without, then alphabetically within each group.
     func serialize() -> String {
         var lines: [String] = []
-        for key in fields.keys.sorted() {
+        let sortedKeys = fields.keys.sorted { a, b in
+            let aHasSpace = a.contains(" ")
+            let bHasSpace = b.contains(" ")
+            if aHasSpace != bHasSpace { return aHasSpace }
+            return a < b
+        }
+        for key in sortedKeys {
             guard let value = fields[key] else { continue }
             let type: String
             if Int(value) != nil {
