@@ -728,11 +728,11 @@ final class MockRDPHost {
             let clientConfirm = RDPDR.buildClientIDConfirm()
             sendVirtualChannel(data: clientConfirm, channelID: drivesChannelID)
         case RDPDR.PAKID_CORE_DEVICELIST_ANNOUNCE:
-            // Client announces a drive — send device list reply
-            // Parse deviceID from payload (offset 4, 4 bytes)
+            // Parse deviceID from payload (offset 4, 4 bytes) — same for drives and printers
             guard header.payload.count >= 8 else { return }
-            let deviceID = UInt32(header.payload[4]) | (UInt32(header.payload[5]) << 8) |
-                         (UInt32(header.payload[6]) << 16) | (UInt32(header.payload[7]) << 24)
+            let deviceID = UInt32(littleEndian: header.payload.withUnsafeBytes {
+                $0.load(fromByteOffset: 4, as: UInt32.self)
+            })
             let reply = RDPDR.buildDeviceListReply(deviceID: deviceID, status: 0)
             sendVirtualChannel(data: reply, channelID: drivesChannelID)
         default:

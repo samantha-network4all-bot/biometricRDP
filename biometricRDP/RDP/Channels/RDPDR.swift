@@ -19,6 +19,7 @@ enum RDPDR {
 
     // Device types
     static let RDPDR_DTYP_FILESYSTEM: UInt32 = 0x00000004
+    static let RDPDR_DTYP_PRINT: UInt32 = 0x00000002
 
     // Build a Server Announce PDU.
     static func buildServerAnnounce(versionMajor: UInt16 = 1, versionMinor: UInt16 = 13, clientID: UInt32 = 1) -> Data {
@@ -116,6 +117,26 @@ enum RDPDR {
         let pathData = localPath.data(using: .utf8) ?? Data()
         body.append(contentsOf: withUnsafeBytes(of: UInt32(pathData.count).littleEndian) { Array($0) })
         body.append(pathData)
+        return body
+    }
+
+    /// Build a Device List Announce PDU for a printer.
+    static func buildPrinterDeviceListAnnounce(deviceID: UInt32, deviceName: String) -> Data {
+        var body = Data()
+        body.append(contentsOf: withUnsafeBytes(of: RDPDR_CTYP_CORE.littleEndian) { Array($0) })
+        body.append(contentsOf: withUnsafeBytes(of: PAKID_CORE_DEVICELIST_ANNOUNCE.littleEndian) { Array($0) })
+        body.append(contentsOf: withUnsafeBytes(of: UInt32(1).littleEndian) { Array($0) }) // deviceCount
+        body.append(contentsOf: withUnsafeBytes(of: RDPDR_DTYP_PRINT.littleEndian) { Array($0) })
+        body.append(contentsOf: withUnsafeBytes(of: deviceID.littleEndian) { Array($0) })
+        // preferredDosName: 8 bytes, ASCII padded
+        var dosName = Data(repeating: 0, count: 8)
+        let nameBytes = Array(deviceName.utf8.prefix(8))
+        for (i, b) in nameBytes.enumerated() { dosName[i] = b }
+        body.append(dosName)
+        // deviceData: the printer name as UTF-8
+        let nameData = deviceName.data(using: .utf8) ?? Data()
+        body.append(contentsOf: withUnsafeBytes(of: UInt32(nameData.count).littleEndian) { Array($0) })
+        body.append(nameData)
         return body
     }
 
