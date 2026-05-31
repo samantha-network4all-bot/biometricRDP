@@ -51,6 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = pc.view
             profilesController = pc
 
+            // Register credentials controller
+            let cc = CredentialsController()
+            _ = cc.view
+
             do {
                 let server = TestAPIServer()
                 try server.start()
