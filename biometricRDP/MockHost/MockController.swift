@@ -114,6 +114,15 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
             return .ok(json: data)
         }
 
+        router.post(prefix: Self.routePrefix, path: "/pushAudio") { [weak self] _ in
+            guard let self else { return .notFound }
+            guard self.mockHost.isRunning else {
+                return .badRequest("not running")
+            }
+            self.mockHost.pushAudio()
+            return .ok(json: Data("{\"ok\":true}".utf8))
+        }
+
         router.post(prefix: Self.routePrefix, path: "/pushClipboard") { [weak self] req in
             guard let self else { return .notFound }
             struct PushBody: Decodable { let text: String }

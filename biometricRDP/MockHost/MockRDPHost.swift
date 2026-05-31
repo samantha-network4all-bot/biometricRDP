@@ -762,6 +762,42 @@ final class MockRDPHost {
     }
 
     /// Push clipboard text to the client (called by MockController).
+    func pushAudio() {
+        guard let conn = connection else { return }
+        // Send SNDC_FORMATS
+        let formatsMsg = RDPSND.buildFormats()
+        sendVirtualChannel(data: formatsMsg, channelID: 0x0011, conn: conn)
+        // Send a short PCM wave (1000 samples of 16-bit stereo silence + a tone)
+        var pcmData = Data(count: 4000) // 1000 frames * 2 channels * 2 bytes
+        // Fill with a simple square wave pattern
+        for i in 0..<1000 {
+            let sample: Int16 = (i / 10) % 2 == 0 ? 1000 : -1000
+            let offset = i * 4
+            pcmData[offset] = UInt8(sample & 0xFF)
+            pcmData[offset + 1] = UInt8((sample >> 8) & 0xFF)
+            pcmData[offset + 2] = UInt8(sample & 0xFF)
+            pcmData[offset + 3] = UInt8((sample >> 8) & 0xFF)
+        }
+        let waveMsg = RDPSND.buildWave(pcmData: pcmData)
+        sendVirtualChannel(data: waveMsg, channelID: 0x0011, conn: conn)
+    }
+
+    private func sendVirtualChannel(data: Data, channelID: UInt16, conn: NWConnection) {
+        var pdu = Data()
+        pdu.append(0x64) // SendDataIndication
+        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator
+        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
+        pdu.append(0x00) // priority
+        pdu.append(0x01) // segmentation
+        let lenBytes = berLengthBytes(data.count)
+        pdu.append(contentsOf: lenBytes)
+        pdu.append(data)
+        let packet = wrapTPKT(payload: pdu)
+        let done = DispatchSemaphore(value: 0)
+        conn.send(content: packet, completion: .contentProcessed { _ in done.signal() })
+        done.wait()
+    }
+
     func pushClipboard(text: String) {
         clipboardText = text
         guard clipboardActive, let conn = connection else { return }
@@ -850,6 +886,9 @@ final class MockRDPHost {
                 if self.consumeCapabilities(buf: &buf) {
                     conn.send(content: self.buildDemandActive(), completion: .contentProcessed { _ in })
                     phase = .active
+                    // Send audio formats to activate the audio channel
+                    let formatsMsg = RDPSND.buildFormats()
+                    self.sendVirtualChannel(data: formatsMsg, channelID: 0x0011, conn: conn)
                     return true
                 }
             case .active:

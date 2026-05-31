@@ -34,12 +34,14 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
 
     private var inputController: InputController?
     private var clipboardController: ClipboardController?
+    private var audioController: AudioController?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         TestAPIRouter.shared.register(controller: self)
         ensureInputController()
         ensureClipboardController()
+        ensureAudioController()
     }
 
     func ensureInputController() {
@@ -54,6 +56,13 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
         let ctrl = ClipboardController(sessionController: self)
         _ = ctrl.view // load view
         clipboardController = ctrl
+    }
+
+    func ensureAudioController() {
+        guard audioController == nil else { return }
+        let ctrl = AudioController(sessionController: self)
+        _ = ctrl.view
+        audioController = ctrl
     }
 
     func registerRoutes(on router: TestAPIRouter) {
@@ -144,6 +153,10 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             // Wire clipboard handler
             session.clipboardMessageHandler = { [weak self] channelData in
                 self?.handleClipboardData(channelData)
+            }
+            // Wire audio handler
+            session.audioMessageHandler = { [weak self] channelData in
+                self?.audioController?.handleAudioChannelData(channelData)
             }
             return .ok(json: data)
         }

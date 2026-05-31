@@ -32,6 +32,10 @@ final class RDPSession {
     // Virtual channel: cliprdr
     let clipboardChannelID: UInt16 = 0x0010
     var clipboardMessageHandler: ((Data) -> Void)?
+
+    // Virtual channel: rdpsnd (audio)
+    let audioChannelID: UInt16 = 0x0011
+    var audioMessageHandler: ((Data) -> Void)?
     private var readerActive = false
     private let readerQueue = DispatchQueue(label: "rdp-session-reader")
     private var recvBuffer = Data()
@@ -127,6 +131,9 @@ final class RDPSession {
 
                 // Join virtual channel (cliprdr)
                 try self.sendChannelJoin(self.clipboardChannelID)
+
+                // Join virtual channel (rdpsnd audio)
+                try self.sendChannelJoin(self.audioChannelID)
 
                 // Send clipboard monitor ready
                 let monitorReady = ClipRDR.buildMonitorReady()
@@ -419,6 +426,9 @@ final class RDPSession {
 
         if channelID == clipboardChannelID {
             clipboardMessageHandler?(channelData)
+        }
+        if channelID == audioChannelID {
+            audioMessageHandler?(channelData)
         }
     }
 
