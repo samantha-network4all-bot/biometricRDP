@@ -17,6 +17,8 @@ final class MockRDPHost {
     private var listener: NWListener?
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "mock-rdp-host")
+    private let listenerQueue = DispatchQueue(label: "mock-rdp-host-listener")
+    private var listenerPort: NWEndpoint.Port = .any
     var lastKeys: [[String: Any]] = []
     var lastMouse: [[String: Any]] = []
     var lastText: String = ""
@@ -38,14 +40,20 @@ final class MockRDPHost {
         self.mockUsername = username
         self.mockPassword = password
 
-        let params = NWParameters.tcp
+        let tcpOptions = NWProtocolTCP.Options()
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
+
+        // Always recreate the listener: NWListener does not reliably accept new
+        // connections after its first connection has been cancelled.
+        if listener == nil {
+            listenerPort = .any
+        }
 
         listener = try NWListener(using: params, on: .any)
         listener?.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                if let p = self?.listener?.port {
-                }
+                break
             case .failed(let err):
                 NSLog("MockRDPHost listener failed: \(err)")
             default:
@@ -55,14 +63,13 @@ final class MockRDPHost {
         listener?.newConnectionHandler = { [weak self] conn in
             self?.handleConnection(conn)
         }
-        listener?.start(queue: queue)
+        listener?.start(queue: listenerQueue)
 
-        // Wait for listener to be ready using a semaphore
         let sema = DispatchSemaphore(value: 0)
-        let checkTimer = DispatchSource.makeTimerSource(queue: queue)
-        checkTimer.schedule(deadline: .now(), repeating: .milliseconds(10))
+        let timer = DispatchSource.makeTimerSource(queue: listenerQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10))
         var ready = false
-        checkTimer.setEventHandler { [weak self] in
+        timer.setEventHandler { [weak self] in
             if let p = self?.listener?.port, p != .any {
                 ready = true
                 sema.signal()
@@ -71,9 +78,9 @@ final class MockRDPHost {
                 sema.signal()
             }
         }
-        checkTimer.resume()
-        let waitResult = sema.wait(timeout: .now() + 5.0)
-        checkTimer.cancel()
+        timer.resume()
+        _ = sema.wait(timeout: .now() + 5.0)
+        timer.cancel()
 
         guard ready, let p = listener?.port, p != .any else {
             listener?.cancel()
@@ -81,22 +88,29 @@ final class MockRDPHost {
             throw NSError(domain: "MockRDPHost", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no port assigned"])
         }
+        listenerPort = p
         self.port = p
+        connection?.cancel()
+        connection = nil
+        activeConn = nil
+        activeBuf.removeAll()
     }
 
     var isRunning: Bool { listener != nil }
     var hasClientConnected: Bool { connection != nil }
 
     func stop() {
-        connection?.cancel()
+        let conn = connection
         connection = nil
-        listener?.cancel()
-        listener = nil
+        conn?.cancel()
         port = .any
         lastKeys = []
         lastMouse = []
         lastText = ""
         serverChallengeData = Data()
+        clipboardActive = false
+        activeConn = nil
+        activeBuf.removeAll()
     }
 
 
@@ -771,8 +785,11 @@ final class MockRDPHost {
 
     private func handleConnection(_ conn: NWConnection) {
         connection = conn
-        conn.start(queue: queue)
-        handleHandshakePhase(conn)
+        let connQ = DispatchQueue(label: "mock-rdp-conn-\(UUID().uuidString.prefix(8))")
+        conn.start(queue: connQ)
+        connQ.async { [weak self] in
+            self?.handleHandshakePhase(conn)
+        }
     }
 
     private enum Phase { case waitingCR, waitingNLA, waitingNLAAuth, waitingMCS, waitingCaps, active }

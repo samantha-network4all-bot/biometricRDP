@@ -357,7 +357,6 @@ final class RDPSession {
 
     /// Send data over a virtual channel using MCS Send Data Request.
     func sendVirtualChannel(data: Data, channelID: UInt16) throws {
-        guard state == .active else { throw TransportError.notConnected }
         let pdu = buildMCSSendDataRequest(data: data, channelID: channelID)
         try transport.send(pdu)
     }
