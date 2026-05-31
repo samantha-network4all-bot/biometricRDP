@@ -71,29 +71,19 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
         // ---- /input/type (unicode text) ----
         router.post(prefix: Self.routePrefix, path: "/type") { [weak self] req in
             guard let self else { return .notFound }
-            guard let sc = self.sessionController else {
-                return .ok(json: Data("{\"error\":\"not active\"}".utf8))
-            }
-            guard let session = sc.rdpSession,
+            guard let sc = self.sessionController,
+                  let session = sc.rdpSession,
                   case .active = session.state else {
                 return .ok(json: Data("{\"error\":\"not active\"}".utf8))
             }
             struct TypeBody: Decodable {
                 let text: String
             }
-            // Accept multiple body formats: JSON {"text":"..."}, raw text, or query param.
             let text: String
-            if let body = try? JSONDecoder().decode(TypeBody.self, from: req.body), !body.text.isEmpty {
-                text = body.text
-            } else if let raw = String(data: req.body, encoding: .utf8) {
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    text = trimmed
-                } else if let q = req.queryItems.first(where: { $0.name == "text" }), let v = q.value, !v.isEmpty {
-                    text = v
-                } else {
-                    return .badRequest("invalid body")
-                }
+            if let typed = try? JSONDecoder().decode(TypeBody.self, from: req.body), !typed.text.isEmpty {
+                text = typed.text
+            } else if let raw = String(data: req.body, encoding: .utf8), !raw.isEmpty {
+                text = raw
             } else if let q = req.queryItems.first(where: { $0.name == "text" }), let v = q.value, !v.isEmpty {
                 text = v
             } else {
