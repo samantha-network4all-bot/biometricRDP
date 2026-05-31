@@ -238,18 +238,43 @@ final class RDPSession {
         }
     }
 
+    /// Parse the X.224 LI field at the given offset (just past TPKT header).
+    /// Returns the total X.224 header size (including LI), or nil if invalid.
+    /// X.224 header: LI(1 or 2 or 3) + TPDU type(1) + EOT(1).
+    private static func x224HeaderSize(_ data: Data, liOffset: Int) -> Int? {
+        guard liOffset < data.count else { return nil }
+        let li = data[liOffset]
+        let liSize: Int
+        if li < 0x80 {
+            liSize = 1
+        } else if li == 0x81 {
+            guard liOffset + 1 < data.count else { return nil }
+            liSize = 2
+        } else if li == 0x82 {
+            guard liOffset + 2 < data.count else { return nil }
+            liSize = 3
+        } else {
+            return nil
+        }
+        // X.224 header = LI bytes + TPDU type(1) + EOT(1)
+        return liSize + 2
+    }
+
     private func handleIncomingData(_ data: Data) {
         // TPKT header is 4 bytes. Payload starts at offset 4.
         guard data.count >= 5 else { return }
 
+        // Parse X.224 header to find the MCS type byte offset.
         // Check for MCS Send Data Indication (0x64) or Send Data Request (0x68)
         // which are used for virtual channel data.
-        // TPKT(4) + X.224(LI(1) + 0xF0(1) + 0x80(1)) = 7 bytes, then MCS type at offset 7.
-        if data.count >= 8 && data[5] == 0xF0 && data[6] == 0x80 {
-            let mcsType = data[7]
-            if mcsType == 0x64 || mcsType == 0x68 {
-                handleMCSSendData(data)
-                return
+        if let hdrSize = Self.x224HeaderSize(data, liOffset: 4) {
+            let mcsOff = 4 + hdrSize
+            if mcsOff < data.count {
+                let mcsType = data[mcsOff]
+                if mcsType == 0x64 || mcsType == 0x68 {
+                    handleMCSSendData(data, x224HdrSize: hdrSize)
+                    return
+                }
             }
         }
 
@@ -404,9 +429,9 @@ final class RDPSession {
     }
 
     /// Handle an MCS Send Data Indication/Request (virtual channel data).
-    /// Layout: TPKT(4) + X.224(LI(1) + 0xF0(1) + 0x80(1)) + MCS(type(1) + initiator(2) + channelID(2) + prio(1) + seg(1) + berLen + userData)
-    private func handleMCSSendData(_ data: Data) {
-        var off = 7 // skip TPKT(4) + X.224(3) to reach MCS type byte
+    /// Layout: TPKT(4) + X.224(variable) + MCS(type(1) + initiator(2) + channelID(2) + prio(1) + seg(1) + berLen + userData)
+    private func handleMCSSendData(_ data: Data, x224HdrSize: Int) {
+        var off = 4 + x224HdrSize // skip TPKT(4) + X.224(variable) to reach MCS type byte
         guard off + 6 <= data.count else { return }
         off += 1 // skip MCS type byte (0x64 or 0x68)
         off += 2 // initiator (2 bytes)
