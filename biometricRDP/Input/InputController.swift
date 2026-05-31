@@ -82,8 +82,27 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             let text: String
             if let typed = try? JSONDecoder().decode(TypeBody.self, from: req.body), !typed.text.isEmpty {
                 text = typed.text
-            } else if let raw = String(data: req.body, encoding: .utf8), !raw.isEmpty {
-                text = raw
+            } else if let raw = String(data: req.body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                // Handle raw text body, JSON string literal, or form-encoded
+                if raw.hasPrefix("\"") && raw.hasSuffix("\"") && raw.count >= 2 {
+                    // JSON string literal: "hi" → hi
+                    text = String(raw.dropFirst().dropLast())
+                } else if let eqRange = raw.range(of: "="), eqRange.lowerBound != raw.startIndex, eqRange.upperBound != raw.endIndex, raw.hasPrefix("text=") {
+                    // Form-encoded: text=hi → hi
+                    text = String(raw.dropFirst(5))
+                } else if raw.hasPrefix("{") {
+                    // JSON object that didn't decode — extract text field manually
+                    if let start = raw.range(of: "\"text\""),
+                       let colon = raw.range(of: ":", range: start.upperBound..<raw.endIndex),
+                       let openQuote = raw.range(of: "\"", range: colon.upperBound..<raw.endIndex),
+                       let closeQuote = raw.range(of: "\"", range: openQuote.upperBound..<raw.endIndex) {
+                        text = String(raw[openQuote.upperBound..<closeQuote.lowerBound])
+                    } else {
+                        text = raw
+                    }
+                } else {
+                    text = raw
+                }
             } else if let q = req.queryItems.first(where: { $0.name == "text" }), let v = q.value, !v.isEmpty {
                 text = v
             } else {
