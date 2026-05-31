@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var appController: AppController!
     var testAPIServer: TestAPIServer?
     var mockController: MockController?
+    var profilesController: ProfilesController?
     var tlsIdentity: sec_identity_t?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -48,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Register profiles controller for test-mode profiles dir
             let pc = ProfilesController()
             _ = pc.view
+            profilesController = pc
 
             do {
                 let server = TestAPIServer()
