@@ -60,7 +60,7 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
             return .ok(json: Data("{\"ok\":true}".utf8))
         }
 
-        // POST /credentials/save {host,username,password} → {ok:true,id:"c1"}
+        // POST /credentials/save {host,username,password} → {ok:true,id:"c1"} or {error:"vault locked"}
         router.post(prefix: Self.routePrefix, path: "/save") { [weak self] req in
             guard let self else { return .notFound }
             struct SaveBody: Decodable {
@@ -77,7 +77,11 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
             do {
                 try self.vault.save(credential: cred)
             } catch VaultError.notUnlocked {
-                return .badRequest("vault locked")
+                let resp: [String: Any] = ["error": "vault locked"]
+                guard let data = try? JSONSerialization.data(withJSONObject: resp) else {
+                    return .internalError
+                }
+                return .ok(json: data)
             } catch {
                 return .internalError
             }
@@ -130,7 +134,7 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
             }
         }
 
-        // POST /credentials/delete {id:"c1"} → {ok:true}
+        // POST /credentials/delete {id:"c1"} → {ok:true} or {error:"not found or locked"}
         router.post(prefix: Self.routePrefix, path: "/delete") { [weak self] req in
             guard let self else { return .notFound }
             struct DeleteBody: Decodable { let id: String }
@@ -140,7 +144,11 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
             do {
                 try self.vault.delete(id: body.id)
             } catch {
-                return .badRequest("not found or locked")
+                let resp: [String: Any] = ["error": "not found or locked"]
+                guard let data = try? JSONSerialization.data(withJSONObject: resp) else {
+                    return .internalError
+                }
+                return .ok(json: data)
             }
             return .ok(json: Data("{\"ok\":true}".utf8))
         }
