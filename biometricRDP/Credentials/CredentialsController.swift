@@ -73,7 +73,8 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
             }
             let id = "c" + UUID().uuidString.prefix(8).lowercased()
             let cred = StoredCredential(id: id, host: body.host,
-                                        username: body.username, password: body.password)
+                                        username: body.username, password: body.password,
+                                        createdAt: Int(Date().timeIntervalSince1970 * 1000))
             do {
                 try self.vault.save(credential: cred)
             } catch VaultError.notUnlocked {
@@ -112,18 +113,17 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
         router.get(prefix: Self.routePrefix, path: "/get") { [weak self] req in
             guard let self else { return .notFound }
             guard self.isTestMode else { return .notFound }
-            let id: String?
+            let credId: String?
             if let qid = req.queryItems.first(where: { $0.name == "id" })?.value {
-                id = qid
+                credId = qid
             } else {
-                // No id provided — use the most recently saved credential
-                id = try? self.vault.list().last?.id
+                credId = try? self.vault.mostRecent()?.id
             }
-            guard let credId = id else {
+            guard let id = credId else {
                 return .badRequest("missing id")
             }
             do {
-                let cred = try self.vault.get(id: credId)
+                let cred = try self.vault.get(id: id)
                 let resp: [String: Any] = ["password": cred.password]
                 guard let data = try? JSONSerialization.data(withJSONObject: resp) else {
                     return .internalError

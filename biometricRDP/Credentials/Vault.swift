@@ -13,6 +13,7 @@ struct StoredCredential: Codable {
     let host: String
     let username: String
     let password: String
+    let createdAt: Int
 }
 
 final class Vault {
@@ -51,6 +52,11 @@ final class Vault {
     func save(credential: StoredCredential) throws {
         guard isUnlocked else { throw VaultError.notUnlocked }
         credentials[credential.id] = credential
+    }
+
+    func mostRecent() throws -> StoredCredential? {
+        guard isUnlocked else { throw VaultError.notUnlocked }
+        return credentials.values.max(by: { $0.createdAt < $1.createdAt })
         try flushToDisk()
     }
 
