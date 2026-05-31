@@ -92,6 +92,8 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
                 self.mockHost.pushSolid(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
             } else if body.pattern == "solid-rle" {
                 self.mockHost.pushRLEBitmap(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
+            } else if body.pattern == "solid-fp" {
+                self.mockHost.pushFastPathBitmap(r: r, g: g, b: b, x: x, y: y, width: w, height: h)
             }
             // Allow time for the client's background reader to receive and process the bitmap data
             Thread.sleep(forTimeInterval: 0.15)

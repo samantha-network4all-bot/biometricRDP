@@ -214,6 +214,24 @@ final class RDPSession {
     }
 
     private func handleIncomingData(_ data: Data) {
+        // TPKT header is 4 bytes. Payload starts at offset 4.
+        guard data.count >= 5 else { return }
+
+        // Detect fast-path output: action byte = 0x00 (FASTPATH_OUTPUT_ACTION)
+        // Fast-path skips X.224 — TPKT payload is directly the fast-path update PDU
+        if data[4] == 0x00 {
+            guard let rects = parseFastPathBitmapOutput(data) else { return }
+            for rect in rects {
+                BitmapCodec.decodeRaw(
+                    bitmapData: rect.bitmapData,
+                    destX: rect.destX, destY: rect.destY,
+                    width: rect.width, height: rect.height,
+                    bpp: rect.bpp, into: framebuffer)
+            }
+            return
+        }
+
+        // Slow-path: BitmapUpdate handles TPKT + X.224 + Share Data Header
         guard let rects = BitmapUpdate.parseBitmapUpdate(data) else { return }
 
         for rect in rects {
@@ -231,6 +249,77 @@ final class RDPSession {
                     bpp: rect.bpp, into: framebuffer)
             }
         }
+    }
+
+    /// Parse a fast-path bitmap update PDU.
+    /// Format after TPKT header: fpHeader(1) + length(2) + updateHeader(1) + numRects(2) + bitmapData...
+    private func parseFastPathBitmapOutput(_ data: Data) -> [(destX: Int, destY: Int, width: Int, height: Int, bpp: Int, bitmapData: Data)]? {
+        var off = 4 // skip TPKT header (4 bytes)
+
+        guard off < data.count else { return nil }
+        let fpHeader = data[off]; off += 1
+        // action = bits 0-1 should be 0 (FASTPATH_OUTPUT_ACTION)
+        guard (fpHeader & 0x03) == 0 else { return nil }
+
+        // Length encoding: bit 7 of first length byte = 1 means 2-byte length
+        guard off < data.count else { return nil }
+        let len1 = data[off]; off += 1
+        var fpLen: Int
+        if len1 & 0x80 != 0 {
+            guard off < data.count else { return nil }
+            let len2 = data[off]; off += 1
+            fpLen = ((Int(len1) & 0x7F) << 8) | Int(len2)
+        } else {
+            fpLen = Int(len1)
+        }
+        // Validate length against remaining data
+        guard fpLen > 0 && off + fpLen <= data.count else { return nil }
+
+        // Skip compression header (bits 6-7 of fpHeader), no compression for now
+        let _ = (fpHeader >> 6) & 0x03
+
+        // TS_FP_UPDATE header
+        guard off < data.count else { return nil }
+        let updateHeader = data[off]; off += 1
+        let updateCode = updateHeader & 0x0F
+        guard updateCode == 2 else { return nil } // 2 = UPDATETYPE_BITMAP
+        let fragmentation = (updateHeader >> 4) & 0x03
+        guard fragmentation == 0 else { return nil }
+        // Bits 6-7: compression — not handling compressed fast-path yet
+        guard (updateHeader >> 6) & 0x03 == 0 else { return nil }
+
+        // numRects (little-endian 16-bit)
+        guard off + 2 <= data.count else { return nil }
+        let numRects = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+
+        // Parse the first rectangle's bitmap data
+        // TS_UPDATE_BITMAP_DATA: left(2) + top(2) + right(2) + bottom(2) + width(2) + height(2) +
+        //                         bpp(2) + flags(2) + dataLen(2) + pixelData
+        guard off + 18 <= data.count else { return nil }
+        let left = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let top = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let right = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let bottom = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let width = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let height = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let bppVal = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let _flags = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+        let dataLen = (Int(data[off + 1]) << 8) | Int(data[off])
+        off += 2
+
+        guard dataLen >= 0 && off + dataLen <= data.count else { return nil }
+        let bitmapData = data.subdata(in: off..<(off + dataLen))
+
+        return [(destX: left, destY: top, width: width, height: height, bpp: bppVal, bitmapData: bitmapData)]
     }
 
     func disconnect() {

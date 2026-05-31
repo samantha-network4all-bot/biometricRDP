@@ -55,11 +55,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
                 return .badRequest("need scancode or key")
             }
             let down = body.down ?? true
-            var flags: UInt16 = 0
-            if !down {
-                flags |= InputPDU.KBDFLAGS_RELEASE
-            }
-            let pdu = InputPDU.buildKeyboardEvent(scancode: scancode, flags: flags)
+            let pdu = FastPath.buildKeyboardEvent(scancode: scancode, down: down)
             do {
                 try session.sendInput(pdu)
             } catch {
@@ -83,10 +79,12 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             if let t = body?.text, !t.isEmpty {
                 for scalar in t.unicodeScalars {
                     let code = UInt16(scalar.value)
-                    for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
-                        let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code, flags: flags)
-                        do { try session.sendInput(pdu) } catch { return .internalError }
-                    }
+                    let downPdu = FastPath.buildUnicodeEvent(unicodeCode: code, down: true)
+                    let upPdu = FastPath.buildUnicodeEvent(unicodeCode: code, down: false)
+                    do {
+                        try session.sendInput(downPdu)
+                        try session.sendInput(upPdu)
+                    } catch { return .internalError }
                 }
                 return .ok(json: Data("{\"ok\":true}".utf8))
             }
@@ -112,10 +110,12 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
                 }
                 for scalar in text.unicodeScalars {
                     let code = UInt16(scalar.value)
-                    for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
-                        let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code, flags: flags)
-                        do { try session.sendInput(pdu) } catch { return .internalError }
-                    }
+                    let downPdu = FastPath.buildUnicodeEvent(unicodeCode: code, down: true)
+                    let upPdu = FastPath.buildUnicodeEvent(unicodeCode: code, down: false)
+                    do {
+                        try session.sendInput(downPdu)
+                        try session.sendInput(upPdu)
+                    } catch { return .internalError }
                 }
                 return .ok(json: Data("{\"ok\":true}".utf8))
             }
@@ -166,7 +166,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
                 }
             default: return .badRequest("invalid action")
             }
-            let pdu = InputPDU.buildMouseEvent(destX: body.x, destY: body.y, flags: flags)
+            let pdu = FastPath.buildMouseEvent(destX: body.x, destY: body.y, flags: flags)
             do {
                 try session.sendInput(pdu)
             } catch {

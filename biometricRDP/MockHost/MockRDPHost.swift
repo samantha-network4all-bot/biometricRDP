@@ -133,13 +133,25 @@ final class MockRDPHost {
         }
     }
 
-    /// Parse and record an input PDU from the client (TS_INPUT_PDU = PDUTYPE2_INPUT 0x001C).
+    /// Parse and record an input PDU from the client.
+    /// Handles both slow-path (TPKT + X.224 + Share Data Header + TS_INPUT_PDU = PDUTYPE2_INPUT 0x001C)
+    /// and fast-path (TPKT + TS_FP_INPUT_PDU) input.
     /// packet is a complete TPKT packet (starts with 0x03,0x00,tpktLen...).
     private func handleInputPDU(packet: Data) {
         guard packet.count >= 4 else { return }
-        // The TPKT packet: 0x03 0x00 lenHI lenLO LI ...
+        // The TPKT packet: 0x03 0x00 lenHI lenLO payload...
+        let tpktLen = (Int(packet[2]) << 8) | Int(packet[3])
+        guard tpktLen == packet.count, tpktLen >= 4 else { return }
         var off = 4
         guard off < packet.count else { return }
+
+        // Check for fast-path input: first payload byte action = 0x01 (FASTPATH_INPUT_ACTION_FASTPATH)
+        if packet[off] == 0x01 {
+            handleFastPathInput(pktLen: tpktLen, payload: packet.subdata(in: off..<packet.count))
+            return
+        }
+
+        // Slow-path: X.224 header
         let li = packet[off]
         off += 1
         var hdrLen = 1
@@ -160,7 +172,7 @@ final class MockRDPHost {
         // totalLen at off..off+1 (unused, skip)
         let pduType2 = (Int(packet[off + 3]) << 8) | Int(packet[off + 2])
         off += 6
-        // PDUTYPE2_INPUT = 0x001C ; PDUTYPE2_SYNCHRONISE = 0x1D; we only handle INPUT here
+        // PDUTYPE2_INPUT = 0x001C
         guard pduType2 == 0x001C, off + 4 <= packet.count else { return }
         // TS_INPUT_PDU_DATA: numberEvents(2) + pad(2)
         let numberEvents = (Int(packet[off + 1]) << 8) | Int(packet[off])
@@ -218,6 +230,85 @@ final class MockRDPHost {
                     lastText.append(Character(scalar))
                 }
                 let scancode = unicodeToHIDScancode(unicodeCode)
+                lastKeys.append(["scancode": scancode, "down": down])
+            } else {
+                break
+            }
+        }
+    }
+
+    /// Parse a fast-path input PDU (TS_FP_INPUT_PDU).
+    /// Payload starts with action(1), already checked to be 0x01 (FASTPATH_INPUT_ACTION_FASTPATH).
+    private func handleFastPathInput(pktLen: Int, payload: Data) {
+        guard payload.count >= 4 else { return }
+        var off = 0
+        // Read action
+        let action = payload[off]; off += 1
+        guard action == 0x01 else { return } // FASTPATH_INPUT_ACTION_FASTPATH
+
+        // Read numEvents
+        let numEvents = Int(payload[off]); off += 1
+
+        // Read length (1 or 2 bytes) — length encoding
+        let lenByte = payload[off]; off += 1
+        if lenByte & 0x80 != 0 {
+            // Two-byte length
+            guard off + 1 <= payload.count else { return }
+            _ = payload[off]; off += 1
+        }
+
+        // Parse events
+        for _ in 0..<numEvents {
+            guard off < payload.count else { return }
+            let eventCode = payload[off]; off += 1
+
+            if eventCode == 0x01, off + 6 <= payload.count {
+                // TS_FP_POINTER_EVENT: eventCode(1) + pointerFlags(2) + xPos(2) + yPos(2)
+                let pointerFlags = (Int(payload[off + 1]) << 8) | Int(payload[off])
+                off += 2
+                let xPos = (Int(payload[off + 1]) << 8) | Int(payload[off])
+                off += 2
+                let yPos = (Int(payload[off + 1]) << 8) | Int(payload[off])
+                off += 2
+                var button = "left"
+                var act = "down"
+                if pointerFlags & 0x0800 != 0 {
+                    act = "move"
+                } else if pointerFlags & 0x8000 != 0 {
+                    if pointerFlags & 0x1000 != 0 { button = "left" }
+                    else if pointerFlags & 0x2000 != 0 { button = "right" }
+                    else if pointerFlags & 0x4000 != 0 { button = "middle" }
+                } else {
+                    if pointerFlags & 0x1000 != 0 { button = "left" }
+                    else if pointerFlags & 0x2000 != 0 { button = "right" }
+                    else if pointerFlags & 0x4000 != 0 { button = "middle" }
+                    act = "up"
+                }
+                let recordAction = (act == "down") ? "click" : act
+                lastMouse.append(["x": xPos, "y": yPos, "button": button, "action": recordAction])
+            } else if eventCode == 0x02, off + 4 <= payload.count {
+                // TS_FP_KBD_EVENT: eventCode(1) + keyboardFlags(1) + keyCode(2) + pad(1)
+                let kbdFlags = payload[off]
+                off += 1
+                let keyCode = UInt16(payload[off]) | (UInt16(payload[off + 1]) << 8)
+                off += 2
+                _ = payload[off] // padding
+                off += 1
+                let down = (kbdFlags & 0x01) == 0
+                lastKeys.append(["scancode": Int(keyCode), "down": down])
+            } else if eventCode == 0x03, off + 4 <= payload.count {
+                // TS_FP_UNICODE_KBD_EVENT: eventCode(1) + keyboardFlags(1) + unicodeCode(2) + pad(1)
+                let kbdFlags = payload[off]
+                off += 1
+                let unicodeCode = UInt16(payload[off]) | (UInt16(payload[off + 1]) << 8)
+                off += 2
+                _ = payload[off] // padding
+                off += 1
+                let down = (kbdFlags & 0x01) == 0
+                if down, let scalar = UnicodeScalar(unicodeCode) {
+                    lastText.append(Character(scalar))
+                }
+                let scancode = unicodeToHIDScancode(Int(unicodeCode))
                 lastKeys.append(["scancode": scancode, "down": down])
             } else {
                 break
@@ -429,6 +520,106 @@ final class MockRDPHost {
             sendDone.wait()
             if let err = sendError {
                 NSLog("MockRDPHost pushRLEBitmap send error: \(err)")
+                return
+            }
+
+            currentRow += stripRows
+            remainingRows -= stripRows
+        }
+    }
+
+    /// Push a fast-path solid-color bitmap update.
+    func pushFastPathBitmap(r: UInt8, g: UInt8, b: UInt8, x: Int = 0, y: Int = 0,
+                             width: Int = -1, height: Int = -1) {
+        guard let conn = connection else { return }
+
+        let w = width < 0 ? self.width : width
+        let h = height < 0 ? self.height : height
+        let destX = x
+        let destY = y
+
+        guard w > 0, h > 0 else { return }
+
+        let bytesPerPixel = bpp / 8
+        guard bytesPerPixel > 0 else { return }
+
+        // Build a solid-color pixel row
+        let rowBytes = w * bytesPerPixel
+        let paddedRowBytes = ((rowBytes + 3) / 4) * 4
+        var solidRow = Data(count: paddedRowBytes)
+        for col in 0..<w {
+            let off = col * bytesPerPixel
+            writeSolidPixel(data: &solidRow, offset: off, bytesPerPixel: bytesPerPixel, r: r, g: g, b: b)
+        }
+
+        // RDP totalLength and bitmapDataLength are 16-bit fields.
+        // Send one TPKT packet per horizontal strip to stay within limits.
+        let maxRowsPerStrip = max(1, (65535 - 6 - 4 - 18) / paddedRowBytes)
+        var remainingRows = h
+        var currentRow = 0
+
+        while remainingRows > 0 {
+            let stripRows = min(remainingRows, maxRowsPerStrip)
+            let stripDestY = destY + currentRow
+            let stripW = UInt16(w)
+            let stripH = UInt16(stripRows)
+            let bppVal = UInt16(bpp)
+
+            // Build the bitmap data for this strip
+            var stripBitmapData = Data()
+            for _ in 0..<stripRows {
+                stripBitmapData.append(solidRow)
+            }
+            let bitmapDataLen = UInt16(stripBitmapData.count)
+
+            // TS_UPDATE_BITMAP_DATA (fast-path format):
+            //   left(2) + top(2) + right(2) + bottom(2) + width(2) + height(2) +
+            //   bpp(2) + flags(2) + dataLen(2) + raw pixel data
+            var bitmapBody = Data()
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: UInt16(destX).littleEndian) { Array($0) }) // left
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: UInt16(stripDestY).littleEndian) { Array($0) }) // top
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: UInt16(destX + w - 1).littleEndian) { Array($0) }) // right
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: UInt16(stripDestY + stripRows - 1).littleEndian) { Array($0) }) // bottom
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripW.littleEndian) { Array($0) }) // width
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: stripH.littleEndian) { Array($0) }) // height
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: bppVal.littleEndian) { Array($0) }) // bpp
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: UInt16(0).littleEndian) { Array($0) }) // flags
+            bitmapBody.append(contentsOf: withUnsafeBytes(of: bitmapDataLen.littleEndian) { Array($0) }) // dataLen
+            bitmapBody.append(stripBitmapData) // raw pixel data
+
+            let totalBitmapLen = bitmapBody.count
+
+            // Wrap in TPKT (no X.224 — fast-path skips X.224)
+            // Fast-path TS_FP_UPDATE: action=0 (FASTPATH_OUTPUT), no length encoding in header byte
+            let fpHeader: UInt8 = 0x00 // action = FASTPATH_OUTPUT_ACTION
+            let len1 = UInt8(0x80 | ((totalBitmapLen >> 8) & 0x7F)) // high bit set = 2-byte length
+            let len2 = UInt8(totalBitmapLen & 0xFF)
+
+            // TS_FP_UPDATE: updateHeader with updateType = UPDATETYPE_BITMAP (2)
+            let updateHeader: UInt8 = 0x02 // no fragmentation, no compression, code=2
+
+            // numberRects(2) for fast-path bitmap data
+            var fpUpdate = Data()
+            fpUpdate.append(fpHeader)
+            fpUpdate.append(len1)
+            fpUpdate.append(len2)
+            fpUpdate.append(updateHeader)
+            fpUpdate.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // numRects = 1
+            fpUpdate.append(bitmapBody)
+
+            let tpktLen = 4 + fpUpdate.count
+            var tpkt = Data([0x03, 0x00, UInt8((tpktLen >> 8) & 0xFF), UInt8(tpktLen & 0xFF)])
+            tpkt.append(fpUpdate)
+
+            let sendDone = DispatchSemaphore(value: 0)
+            var sendError: Error?
+            conn.send(content: tpkt, completion: .contentProcessed { err in
+                sendError = err
+                sendDone.signal()
+            })
+            sendDone.wait()
+            if let err = sendError {
+                NSLog("MockRDPHost pushFastPathBitmap send error: \(err)")
                 return
             }
 
