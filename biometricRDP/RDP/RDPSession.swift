@@ -229,9 +229,10 @@ final class RDPSession {
         guard data.count >= 5 else { return }
 
         // Check for MCS Send Data Indication (0x64) or Send Data Request (0x68)
-        // which are used for virtual channel data
-        if data[4] == 0x03 && data.count >= 7 {
-            let mcsType = data[6]
+        // which are used for virtual channel data.
+        // TPKT(4) + X.224(LI(1) + 0xF0(1) + 0x80(1)) = 7 bytes, then MCS type at offset 7.
+        if data.count >= 8 && data[5] == 0xF0 && data[6] == 0x80 {
+            let mcsType = data[7]
             if mcsType == 0x64 || mcsType == 0x68 {
                 handleMCSSendData(data)
                 return
@@ -389,9 +390,11 @@ final class RDPSession {
     }
 
     /// Handle an MCS Send Data Indication/Request (virtual channel data).
+    /// Layout: TPKT(4) + X.224(LI(1) + 0xF0(1) + 0x80(1)) + MCS(type(1) + initiator(2) + channelID(2) + prio(1) + seg(1) + berLen + userData)
     private func handleMCSSendData(_ data: Data) {
-        var off = 6 // skip TPKT(4) + LI(1) + type(1) to reach MCS type
+        var off = 7 // skip TPKT(4) + X.224(3) to reach MCS type byte
         guard off + 6 <= data.count else { return }
+        off += 1 // skip MCS type byte (0x64 or 0x68)
         off += 2 // initiator (2 bytes)
         let channelID = UInt16(data[off]) | (UInt16(data[off + 1]) << 8)
         off += 2
