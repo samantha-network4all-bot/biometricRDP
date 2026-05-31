@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mc.sessionController = wc.sessionController
             mockController = mc
 
+            // Register profiles controller for test-mode profiles dir
+            let pc = ProfilesController()
+            _ = pc.view
+
             do {
                 let server = TestAPIServer()
                 try server.start()
