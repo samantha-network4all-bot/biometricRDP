@@ -127,7 +127,10 @@ final class RDPSession {
                 try self.transport.send(Capabilities.buildControlRequestPDU())
                 try self.transport.send(Capabilities.buildFontListPDU())
 
-                let _ = try self.transport.recv(minLength: 1, maxLength: 65536)
+                let finalData = try self.transport.recv(minLength: 1, maxLength: 65536)
+                if !finalData.isEmpty {
+                    recvBuffer.append(finalData)
+                }
 
                 // Join virtual channel (cliprdr)
                 try self.sendChannelJoin(self.clipboardChannelID)
@@ -156,6 +159,10 @@ final class RDPSession {
             setState(.failed)
             errorReason = "connect timeout"
         }
+
+        // Process any TPKT packets already buffered from the handshake
+        // (e.g. audio/virtual-channel data piggybacked on the capability exchange)
+        while processOnePacket() {}
 
         // Start background reader if active
         if state == .active {

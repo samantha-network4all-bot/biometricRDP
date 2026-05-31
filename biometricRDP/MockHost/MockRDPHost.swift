@@ -766,10 +766,10 @@ final class MockRDPHost {
         guard let conn = connection else { return }
         // Send SNDC_FORMATS
         let formatsMsg = RDPSND.buildFormats()
-        sendVirtualChannel(data: formatsMsg, channelID: 0x0011, conn: conn)
-        // Send a short PCM wave (1000 samples of 16-bit stereo silence + a tone)
-        var pcmData = Data(count: 4000) // 1000 frames * 2 channels * 2 bytes
-        // Fill with a simple square wave pattern
+        sendVirtualChannelNoWait(data: formatsMsg, channelID: 0x0011, conn: conn)
+        // Send a short PCM wave: 1000 frames of 16-bit stereo square wave
+        // 1000 frames * 2 channels * 2 bytes = 4000 bytes of PCM data
+        var pcmData = Data(count: 4000)
         for i in 0..<1000 {
             let sample: Int16 = (i / 10) % 2 == 0 ? 1000 : -1000
             let offset = i * 4
@@ -779,23 +779,7 @@ final class MockRDPHost {
             pcmData[offset + 3] = UInt8((sample >> 8) & 0xFF)
         }
         let waveMsg = RDPSND.buildWave(pcmData: pcmData)
-        sendVirtualChannel(data: waveMsg, channelID: 0x0011, conn: conn)
-    }
-
-    private func sendVirtualChannel(data: Data, channelID: UInt16, conn: NWConnection) {
-        var pdu = Data()
-        pdu.append(0x64) // SendDataIndication
-        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator
-        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
-        pdu.append(0x00) // priority
-        pdu.append(0x01) // segmentation
-        let lenBytes = berLengthBytes(data.count)
-        pdu.append(contentsOf: lenBytes)
-        pdu.append(data)
-        let packet = wrapTPKT(payload: pdu)
-        let done = DispatchSemaphore(value: 0)
-        conn.send(content: packet, completion: .contentProcessed { _ in done.signal() })
-        done.wait()
+        sendVirtualChannelNoWait(data: waveMsg, channelID: 0x0011, conn: conn)
     }
 
     /// Fire-and-forget virtual channel send (no semaphore wait) — safe to call
@@ -904,6 +888,8 @@ final class MockRDPHost {
                     phase = .active
                     // Send audio formats to activate the audio channel
                     // Use fire-and-forget to avoid deadlock (sendVirtualChannel waits on conn queue)
+                    // Only send SNDC_FORMATS here (no wave data) so samplesReceived stays 0
+                    // until pushAudio() is called explicitly.
                     let formatsMsg = RDPSND.buildFormats()
                     self.sendVirtualChannelNoWait(data: formatsMsg, channelID: 0x0011, conn: conn)
                     return true
