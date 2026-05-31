@@ -755,20 +755,26 @@ final class MockRDPHost {
         // Wrap in TPKT + X.224
         let packet = wrapTPKT(payload: pdu)
         let sendDone = DispatchSemaphore(value: 0)
+        let isTestMode = ProcessInfo.processInfo.environment["BIOMETRICRDP_TEST_API"] == "1"
         conn.send(content: packet, completion: .contentProcessed { _ in
             sendDone.signal()
         })
-        sendDone.wait()
+        if isTestMode {
+            // In test mode, use bounded wait to avoid deadlocking the HTTP handler
+            _ = sendDone.wait(timeout: .now() + 5.0)
+        } else {
+            sendDone.wait()
+        }
     }
 
     /// Push clipboard text to the client (called by MockController).
     func pushAudio() {
-        guard connection != nil else { return }
-        // Send SNDC_FORMATS
+        guard let conn = connection else { return }
+        // Send SNDC_FORMATS + SNDC_WAVE over the audio virtual channel.
+        // Build the complete MCS+X.224+TPKT packet and use a synchronous send
+        // with a bounded timeout to avoid blocking the HTTP handler indefinitely.
         let formatsMsg = RDPSND.buildFormats()
-        sendVirtualChannel(data: formatsMsg, channelID: 0x0011)
-        // Send a short PCM wave: 1000 frames of 16-bit stereo square wave
-        // 1000 frames * 2 channels * 2 bytes = 4000 bytes of PCM data
+        sendMCSData(msgData: formatsMsg, channelID: 0x0011, conn: conn)
         var pcmData = Data(count: 4000)
         for i in 0..<1000 {
             let sample: Int16 = (i / 10) % 2 == 0 ? 1000 : -1000
@@ -779,7 +785,30 @@ final class MockRDPHost {
             pcmData[offset + 3] = UInt8((sample >> 8) & 0xFF)
         }
         let waveMsg = RDPSND.buildWave(pcmData: pcmData)
-        sendVirtualChannel(data: waveMsg, channelID: 0x0011)
+        sendMCSData(msgData: waveMsg, channelID: 0x0011, conn: conn)
+    }
+
+    /// Send a virtual-channel message with MCS+X.224+TPKT framing.
+    /// Uses a bounded semaphore wait to avoid blocking the HTTP handler.
+    private func sendMCSData(msgData: Data, channelID: UInt16, conn: NWConnection) {
+        var pdu = Data()
+        pdu.append(0x64) // SendDataIndication
+        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator
+        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
+        pdu.append(0x00) // priority
+        pdu.append(0x01) // segmentation
+        let lenBytes = berLengthBytes(msgData.count)
+        pdu.append(contentsOf: lenBytes)
+        pdu.append(msgData)
+        let packet = wrapTPKT(payload: pdu)
+        let done = DispatchSemaphore(value: 0)
+        conn.send(content: packet, completion: .contentProcessed { _ in
+            done.signal()
+        })
+        // Bounded wait: 3 seconds should be more than enough for kernel buffering
+        if done.wait(timeout: .now() + 3.0) == .timedOut {
+            NSLog("MockRDPHost: sendMCSData timeout on channel 0x%04X, %d bytes", channelID, packet.count)
+        }
     }
 
     /// Fire-and-forget virtual channel send (no semaphore wait) — safe to call
