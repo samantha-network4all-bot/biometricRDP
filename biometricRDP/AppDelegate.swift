@@ -57,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = cc.view
             credentialsController = cc
 
+            // ClipboardController is created by SessionController.ensureClipboardController()
+
             do {
                 let server = TestAPIServer()
                 try server.start()

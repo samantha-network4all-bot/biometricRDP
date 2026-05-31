@@ -33,11 +33,13 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     }
 
     private var inputController: InputController?
+    private var clipboardController: ClipboardController?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         TestAPIRouter.shared.register(controller: self)
         ensureInputController()
+        ensureClipboardController()
     }
 
     func ensureInputController() {
@@ -45,6 +47,13 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
         let ctrl = InputController(sessionController: self)
         _ = ctrl.view // load view
         inputController = ctrl
+    }
+
+    func ensureClipboardController() {
+        guard clipboardController == nil else { return }
+        let ctrl = ClipboardController(sessionController: self)
+        _ = ctrl.view // load view
+        clipboardController = ctrl
     }
 
     func registerRoutes(on router: TestAPIRouter) {
@@ -131,6 +140,11 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
                 return .internalError
             }
             self.ensureInputController()
+            self.ensureClipboardController()
+            // Wire clipboard handler
+            session.clipboardMessageHandler = { [weak self] channelData in
+                self?.handleClipboardData(channelData)
+            }
             return .ok(json: data)
         }
 
@@ -205,9 +219,24 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     }
 
     func disconnect() {
+        clipboardController?.setRemoteText("")
         state = .disconnected
         currentHost = ""
         updateDesktop()
+    }
+
+    private func handleClipboardData(_ channelData: Data) {
+        guard let msg = ClipRDR.parseClipMessage(channelData) else { return }
+        switch msg.msgType {
+        case ClipRDR.CB_MSG_TYPE_FORMAT_LIST_RESPONSE:
+            break // acknowledge
+        case ClipRDR.CB_MSG_TYPE_FORMAT_DATA_RESPONSE:
+            if let text = ClipRDR.parseFormatDataResponse(msg.payload) {
+                clipboardController?.setRemoteText(text)
+            }
+        default:
+            break
+        }
     }
 
     private func updateDesktop() {

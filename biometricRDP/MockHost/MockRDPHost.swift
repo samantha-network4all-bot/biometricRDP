@@ -17,9 +17,14 @@ final class MockRDPHost {
     private var listener: NWListener?
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "mock-rdp-host")
-        var lastKeys: [[String: Any]] = []
+    var lastKeys: [[String: Any]] = []
     var lastMouse: [[String: Any]] = []
     var lastText: String = ""
+    var clipboardText: String = ""
+    var clipboardActive: Bool = false
+    private let clipboardChannelID: UInt16 = 0x0010
+    private var channelJoinHandled = false
+    private var demandActiveSent = false
 
 
 
@@ -144,6 +149,17 @@ final class MockRDPHost {
         guard tpktLen == packet.count, tpktLen >= 4 else { return }
         var off = 4
         guard off < packet.count else { return }
+
+        // Check for MCS Send Data Request (0x68) — virtual channel data
+        if packet.count >= 7 && packet[off] >= 2 && packet[off + 1] == 0xF0 && packet[off + 2] == 0x80 && packet[off + 3] == 0x68 {
+            handleVirtualChannelData(packet: packet, mcsStart: off + 3)
+            return
+        }
+        // Also check for MCS Channel Join Request (0x38)
+        if packet.count >= 7 && packet[off] >= 2 && packet[off + 1] == 0xF0 && packet[off + 2] == 0x80 && packet[off + 3] == 0x38 {
+            // Channel join — handled in handshake phase, but in active phase just acknowledge
+            return
+        }
 
         // Check for fast-path input: first payload byte action = 0x01 (FASTPATH_INPUT_ACTION_FASTPATH)
         if packet[off] == 0x01 {
@@ -647,6 +663,106 @@ final class MockRDPHost {
             data[offset]     = UInt8(pixel565 & 0xFF)
             data[offset + 1] = UInt8((pixel565 >> 8) & 0xFF)
         }
+    }
+
+    /// Handle virtual channel data from the client.
+    /// MCS Send Data Request: 0x68 + initiator(2) + channelID(2) + priority(1) + seg(1) + [berLen + data]
+    private func handleVirtualChannelData(packet: Data, mcsStart: Int) {
+        var off = mcsStart + 1 // skip 0x68
+        guard off + 6 <= packet.count else { return }
+        off += 2 // initiator
+        let channelID = UInt16(packet[off]) | (UInt16(packet[off + 1]) << 8)
+        off += 2
+        guard off + 2 <= packet.count else { return }
+        off += 2 // priority + segmentation
+        // BER length of user data
+        guard off < packet.count else { return }
+        var userDataLen = Int(packet[off])
+        off += 1
+        if userDataLen & 0x80 != 0 {
+            let nb = userDataLen & 0x7F
+            guard nb > 0, off + nb <= packet.count else { return }
+            userDataLen = 0
+            for j in 0..<nb {
+                userDataLen = (userDataLen << 8) | Int(packet[off + j])
+            }
+            off += nb
+        }
+        guard off + userDataLen <= packet.count else { return }
+        let channelData = packet.subdata(in: off..<(off + userDataLen))
+
+        if channelID == clipboardChannelID {
+            handleClipRDRMessage(channelData)
+        }
+    }
+
+    /// Handle a ClipRDR message from the client.
+    private func handleClipRDRMessage(_ data: Data) {
+        guard let msg = ClipRDR.parseClipMessage(data) else { return }
+        switch msg.msgType {
+        case ClipRDR.CB_MSG_TYPE_MONITOR_READY:
+            // Client ready — send our format list
+            let formatList = ClipRDR.buildFormatList()
+            sendVirtualChannel(data: formatList, channelID: clipboardChannelID)
+            clipboardActive = true
+        case ClipRDR.CB_MSG_TYPE_FORMAT_LIST:
+            // Client announces formats — respond with success
+            let resp = ClipRDR.buildFormatListResponse()
+            sendVirtualChannel(data: resp, channelID: clipboardChannelID)
+        case ClipRDR.CB_MSG_TYPE_FORMAT_DATA_REQUEST:
+            // Client requests clipboard data — send our text
+            if let fmtID = ClipRDR.parseFormatDataRequest(msg.payload), fmtID == ClipRDR.CF_UNICODETEXT || fmtID == ClipRDR.CF_TEXT {
+                let dataResp = ClipRDR.buildFormatDataResponse(text: clipboardText)
+                sendVirtualChannel(data: dataResp, channelID: clipboardChannelID)
+            }
+        case ClipRDR.CB_MSG_TYPE_FORMAT_DATA_RESPONSE:
+            // Client sent us clipboard data
+            if let text = ClipRDR.parseFormatDataResponse(msg.payload) {
+                clipboardText = text
+            }
+        default:
+            break
+        }
+    }
+
+    /// Send data over the cliprdr virtual channel to the client.
+    private func sendVirtualChannel(data: Data, channelID: UInt16) {
+        guard let conn = connection else { return }
+        var pdu = Data()
+        pdu.append(0x64) // SendDataIndication
+        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator
+        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
+        pdu.append(0x00) // priority
+        pdu.append(0x01) // segmentation
+        // BER length
+        let lenBytes = berLengthBytes(data.count)
+        pdu.append(contentsOf: lenBytes)
+        pdu.append(data)
+        // Wrap in TPKT + X.224
+        let packet = wrapTPKT(payload: pdu)
+        let sendDone = DispatchSemaphore(value: 0)
+        conn.send(content: packet, completion: .contentProcessed { _ in
+            sendDone.signal()
+        })
+        sendDone.wait()
+    }
+
+    /// Push clipboard text to the client (called by MockController).
+    func pushClipboard(text: String) {
+        clipboardText = text
+        guard clipboardActive, let conn = connection else { return }
+        // Send format list to trigger a format data request from client
+        let formatList = ClipRDR.buildFormatList()
+        sendVirtualChannel(data: formatList, channelID: clipboardChannelID)
+        // Then send the data directly
+        let dataResp = ClipRDR.buildFormatDataResponse(text: text)
+        sendVirtualChannel(data: dataResp, channelID: clipboardChannelID)
+    }
+
+    private func berLengthBytes(_ n: Int) -> Data {
+        if n < 128 { return Data([UInt8(n)]) }
+        if n <= 0xFF { return Data([0x81, UInt8(n)]) }
+        return Data([0x82, UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)])
     }
 
     // MARK: - Self-signed cert → sec_identity_t

@@ -113,6 +113,16 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
             let data = try! JSONSerialization.data(withJSONObject: resp)
             return .ok(json: data)
         }
+
+        router.post(prefix: Self.routePrefix, path: "/pushClipboard") { [weak self] req in
+            guard let self else { return .notFound }
+            struct PushBody: Decodable { let text: String }
+            guard let body = try? JSONDecoder().decode(PushBody.self, from: req.body) else {
+                return .badRequest("invalid body")
+            }
+            self.mockHost.pushClipboard(text: body.text)
+            return .ok(json: Data(#"{"ok":true}"#.utf8))
+        }
     }
 
     private static func parseHex(_ s: String, offset: Int) -> UInt8 {

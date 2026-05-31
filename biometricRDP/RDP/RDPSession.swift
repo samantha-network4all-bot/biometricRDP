@@ -28,6 +28,10 @@ final class RDPSession {
     var security: String = ""
 
     private(set) var framebuffer: Framebuffer
+
+    // Virtual channel: cliprdr
+    let clipboardChannelID: UInt16 = 0x0010
+    var clipboardMessageHandler: ((Data) -> Void)?
     private var readerActive = false
     private let readerQueue = DispatchQueue(label: "rdp-session-reader")
     private var recvBuffer = Data()
@@ -120,6 +124,13 @@ final class RDPSession {
                 try self.transport.send(Capabilities.buildFontListPDU())
 
                 let _ = try self.transport.recv(minLength: 1, maxLength: 65536)
+
+                // Join virtual channel (cliprdr)
+                try self.sendChannelJoin(self.clipboardChannelID)
+
+                // Send clipboard monitor ready
+                let monitorReady = ClipRDR.buildMonitorReady()
+                try self.sendVirtualChannel(data: monitorReady, channelID: self.clipboardChannelID)
 
                 self.setState(.active)
                 if self.security.isEmpty {
@@ -216,6 +227,16 @@ final class RDPSession {
     private func handleIncomingData(_ data: Data) {
         // TPKT header is 4 bytes. Payload starts at offset 4.
         guard data.count >= 5 else { return }
+
+        // Check for MCS Send Data Indication (0x64) or Send Data Request (0x68)
+        // which are used for virtual channel data
+        if data[4] == 0x03 && data.count >= 7 {
+            let mcsType = data[6]
+            if mcsType == 0x64 || mcsType == 0x68 {
+                handleMCSSendData(data)
+                return
+            }
+        }
 
         // Detect fast-path output: action byte = 0x00 (FASTPATH_OUTPUT_ACTION)
         // Fast-path skips X.224 — TPKT payload is directly the fast-path update PDU
@@ -332,5 +353,94 @@ final class RDPSession {
     func sendInput(_ data: Data) throws {
         guard state == .active else { throw TransportError.notConnected }
         try transport.send(data)
+    }
+
+    /// Send data over a virtual channel using MCS Send Data Request.
+    func sendVirtualChannel(data: Data, channelID: UInt16) throws {
+        guard state == .active else { throw TransportError.notConnected }
+        let pdu = buildMCSSendDataRequest(data: data, channelID: channelID)
+        try transport.send(pdu)
+    }
+
+    /// Send an MCS Channel Join Request for the given channel.
+    private func sendChannelJoin(_ channelID: UInt16) throws {
+        var pdu = Data()
+        // MCS Channel Join Request [MCSEACHANNELJOINREQUEST] tag 0x38
+        pdu.append(0x38)
+        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator = userID 1
+        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
+        // Wrap in TPKT + X.224 data TPDU
+        try transport.send(wrapMCS(pdu))
+    }
+
+    /// Build an MCS Send Data Request PDU.
+    private func buildMCSSendDataRequest(data: Data, channelID: UInt16) -> Data {
+        var pdu = Data()
+        // MCS Send Data Request header
+        pdu.append(0x68) // SendDataRequest
+        pdu.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // initiator
+        pdu.append(contentsOf: withUnsafeBytes(of: channelID.littleEndian) { Array($0) }) // channelID
+        pdu.append(0x00) // priority = top
+        pdu.append(0x01) // segmentation = begin+end
+        // User data length (BER encoded)
+        let lenBytes = berLength(data.count)
+        pdu.append(contentsOf: lenBytes)
+        pdu.append(data)
+        return wrapMCS(pdu)
+    }
+
+    /// Handle an MCS Send Data Indication/Request (virtual channel data).
+    private func handleMCSSendData(_ data: Data) {
+        var off = 6 // skip TPKT(4) + LI(1) + type(1) to reach MCS type
+        guard off + 6 <= data.count else { return }
+        off += 2 // initiator (2 bytes)
+        let channelID = UInt16(data[off]) | (UInt16(data[off + 1]) << 8)
+        off += 2
+        guard off + 2 <= data.count else { return }
+        off += 2 // priority + segmentation
+        // BER length of user data
+        guard off < data.count else { return }
+        var berOff = off
+        var userDataLen = Int(data[berOff])
+        berOff += 1
+        if userDataLen & 0x80 != 0 {
+            let nb = userDataLen & 0x7F
+            guard nb > 0, berOff + nb <= data.count else { return }
+            userDataLen = 0
+            for j in 0..<nb {
+                userDataLen = (userDataLen << 8) | Int(data[berOff + j])
+            }
+            berOff += nb
+        }
+        guard berOff + userDataLen <= data.count else { return }
+        let channelData = data.subdata(in: berOff..<(berOff + userDataLen))
+
+        if channelID == clipboardChannelID {
+            clipboardMessageHandler?(channelData)
+        }
+    }
+
+    /// Wrap an MCS payload in TPKT + X.224.
+    private func wrapMCS(_ payload: Data) -> Data {
+        let x224PayloadLen = 2 + payload.count
+        let li: UInt8
+        if x224PayloadLen <= 255 {
+            li = UInt8(x224PayloadLen)
+        } else {
+            li = 0xFF
+        }
+        let x224Hdr: [UInt8] = [li, 0xF0, 0x80]
+        let tpktLen = 4 + x224Hdr.count + payload.count
+        let tpkt: [UInt8] = [0x03, 0x00, UInt8((tpktLen >> 8) & 0xFF), UInt8(tpktLen & 0xFF)]
+        var packet = Data(tpkt)
+        packet.append(contentsOf: x224Hdr)
+        packet.append(payload)
+        return packet
+    }
+
+    private func berLength(_ n: Int) -> Data {
+        if n < 128 { return Data([UInt8(n)]) }
+        if n <= 0xFF { return Data([0x81, UInt8(n)]) }
+        return Data([0x82, UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)])
     }
 }
