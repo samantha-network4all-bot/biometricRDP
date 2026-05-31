@@ -123,6 +123,23 @@ final class MockController: NSViewController, TestAPIControllerRoutes {
             return .ok(json: Data("{\"ok\":true}".utf8))
         }
 
+        // POST /audio/push — push a specific number of PCM samples to the client
+        router.post(prefix: "audio", path: "/push") { [weak self] req in
+            guard let self else { return .notFound }
+            struct PushBody: Decodable { let samples: Int }
+            let body: PushBody
+            if let decoded = try? JSONDecoder().decode(PushBody.self, from: req.body) {
+                body = decoded
+            } else {
+                body = PushBody(samples: 1000)
+            }
+            guard self.mockHost.isRunning else {
+                return .badRequest("not running")
+            }
+            self.mockHost.pushAudio(samples: body.samples)
+            return .ok(json: Data("{\"ok\":true}".utf8))
+        }
+
         router.post(prefix: Self.routePrefix, path: "/pushClipboard") { [weak self] req in
             guard let self else { return .notFound }
             struct PushBody: Decodable { let text: String }

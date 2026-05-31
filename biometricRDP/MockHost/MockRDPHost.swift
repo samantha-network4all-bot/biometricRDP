@@ -767,15 +767,13 @@ final class MockRDPHost {
         }
     }
 
-    /// Push clipboard text to the client (called by MockController).
-    func pushAudio() {
+    /// Push audio samples to the client over the rdpsnd virtual channel.
+    /// - Parameter samples: number of PCM stereo frames to send (1 frame = 4 bytes s16le).
+    func pushAudio(samples: Int = 1000) {
         guard let conn = connection else { return }
-        // Send SNDC_FORMATS + SNDC_WAVE over the audio virtual channel.
-        // Use fire-and-forget to avoid blocking the HTTP handler.
-        let formatsMsg = RDPSND.buildFormats()
-        sendMCSDataNoWait(msgData: formatsMsg, channelID: 0x0011, conn: conn)
-        var pcmData = Data(count: 4000)
-        for i in 0..<1000 {
+        // Build PCM data: samples frames of 16-bit stereo (4 bytes per frame)
+        var pcmData = Data(count: samples * 4)
+        for i in 0..<samples {
             let sample: Int16 = (i / 10) % 2 == 0 ? 1000 : -1000
             let offset = i * 4
             pcmData[offset] = UInt8(sample & 0xFF)
