@@ -104,14 +104,22 @@ final class CredentialsController: NSViewController, TestAPIControllerRoutes {
         }
 
         // GET /credentials/get?id=c1 → {password:"p"} (test-only)
+        // If no id is provided, returns the most recently saved credential.
         router.get(prefix: Self.routePrefix, path: "/get") { [weak self] req in
             guard let self else { return .notFound }
             guard self.isTestMode else { return .notFound }
-            guard let id = req.queryItems.first(where: { $0.name == "id" })?.value else {
+            let id: String?
+            if let qid = req.queryItems.first(where: { $0.name == "id" })?.value {
+                id = qid
+            } else {
+                // No id provided — use the most recently saved credential
+                id = try? self.vault.list().last?.id
+            }
+            guard let credId = id else {
                 return .badRequest("missing id")
             }
             do {
-                let cred = try self.vault.get(id: id)
+                let cred = try self.vault.get(id: credId)
                 let resp: [String: Any] = ["password": cred.password]
                 guard let data = try? JSONSerialization.data(withJSONObject: resp) else {
                     return .internalError
