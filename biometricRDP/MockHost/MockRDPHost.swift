@@ -763,10 +763,10 @@ final class MockRDPHost {
 
     /// Push clipboard text to the client (called by MockController).
     func pushAudio() {
-        guard let conn = connection else { return }
+        guard connection != nil else { return }
         // Send SNDC_FORMATS
         let formatsMsg = RDPSND.buildFormats()
-        sendVirtualChannelNoWait(data: formatsMsg, channelID: 0x0011, conn: conn)
+        sendVirtualChannel(data: formatsMsg, channelID: 0x0011)
         // Send a short PCM wave: 1000 frames of 16-bit stereo square wave
         // 1000 frames * 2 channels * 2 bytes = 4000 bytes of PCM data
         var pcmData = Data(count: 4000)
@@ -779,7 +779,7 @@ final class MockRDPHost {
             pcmData[offset + 3] = UInt8((sample >> 8) & 0xFF)
         }
         let waveMsg = RDPSND.buildWave(pcmData: pcmData)
-        sendVirtualChannelNoWait(data: waveMsg, channelID: 0x0011, conn: conn)
+        sendVirtualChannel(data: waveMsg, channelID: 0x0011)
     }
 
     /// Fire-and-forget virtual channel send (no semaphore wait) — safe to call
