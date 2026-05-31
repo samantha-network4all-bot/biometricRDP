@@ -5,7 +5,7 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
 
     weak var sessionController: SessionController?
 
-    /// USB HID keyboard scancode map (usage page 0x07, codes 0x04–0x1D).
+    /// USB HID keyboard scancode map (usage page 0x07, codes 0x04-0x1D).
     private static let keyToScancode: [Character: UInt16] = [
         "a": 0x04, "b": 0x05, "c": 0x06, "d": 0x07, "e": 0x08,
         "f": 0x09, "g": 0x0A, "h": 0x0B, "i": 0x0C, "j": 0x0D,
@@ -79,19 +79,22 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             struct TypeBody: Decodable {
                 let text: String
             }
-            let text: String
-            if let typed = try? JSONDecoder().decode(TypeBody.self, from: req.body), !typed.text.isEmpty {
-                text = typed.text
-            } else if let raw = String(data: req.body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
-                // Handle raw text body, JSON string literal, or form-encoded
-                if raw.hasPrefix("\"") && raw.hasSuffix("\"") && raw.count >= 2 {
-                    // JSON string literal: "hi" → hi
-                    text = String(raw.dropFirst().dropLast())
-                } else if let eqRange = raw.range(of: "="), eqRange.lowerBound != raw.startIndex, eqRange.upperBound != raw.endIndex, raw.hasPrefix("text=") {
-                    // Form-encoded: text=hi → hi
-                    text = String(raw.dropFirst(5))
-                } else if raw.hasPrefix("{") {
-                    // JSON object that didn't decode — extract text field manually
+            let body = try? JSONDecoder().decode(TypeBody.self, from: req.body)
+            if let t = body?.text, !t.isEmpty {
+                for scalar in t.unicodeScalars {
+                    let code = UInt16(scalar.value)
+                    for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
+                        let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code, flags: flags)
+                        do { try session.sendInput(pdu) } catch { return .internalError }
+                    }
+                }
+                return .ok(json: Data("{\"ok\":true}".utf8))
+            }
+            // Fallback: try raw body as text
+            if let raw = String(data: req.body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                let text: String
+                if raw.hasPrefix("{") {
+                    // Try to extract text value from JSON-like string
                     if let start = raw.range(of: "\"text\""),
                        let colon = raw.range(of: ":", range: start.upperBound..<raw.endIndex),
                        let openQuote = raw.range(of: "\"", range: colon.upperBound..<raw.endIndex),
@@ -100,27 +103,23 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
                     } else {
                         text = raw
                     }
+                } else if raw.hasPrefix("\"") && raw.hasSuffix("\"") && raw.count >= 2 {
+                    text = String(raw.dropFirst().dropLast())
+                } else if raw.hasPrefix("text=") {
+                    text = String(raw.dropFirst(5))
                 } else {
                     text = raw
                 }
-            } else if let q = req.queryItems.first(where: { $0.name == "text" }), let v = q.value, !v.isEmpty {
-                text = v
-            } else {
-                return .badRequest("invalid body")
-            }
-            for scalar in text.unicodeScalars {
-                let code = UInt16(scalar.value)
-                // key-down (flags=0x00) then key-up (flags=0x8000)
-                for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
-                    let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code, flags: flags)
-                    do {
-                        try session.sendInput(pdu)
-                    } catch {
-                        return .internalError
+                for scalar in text.unicodeScalars {
+                    let code = UInt16(scalar.value)
+                    for flags in [UInt16(0x00), InputPDU.KBDFLAGS_RELEASE] {
+                        let pdu = InputPDU.buildUnicodeEvent(unicodeCode: code, flags: flags)
+                        do { try session.sendInput(pdu) } catch { return .internalError }
                     }
                 }
+                return .ok(json: Data("{\"ok\":true}".utf8))
             }
-            return .ok(json: Data("{\"ok\":true}".utf8))
+            return .badRequest("invalid body")
         }
 
         router.post(prefix: Self.routePrefix, path: "/mouse") { [weak self] req in
@@ -132,8 +131,8 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             struct MouseBody: Decodable {
                 let x: Int
                 let y: Int
-                let button: String?  // "left", "right", "middle"
-                let action: String   // "move", "down", "up", "click"
+                let button: String?
+                let action: String
                 let wheel: Int?
             }
             guard let body = try? JSONDecoder().decode(MouseBody.self, from: req.body) else {
@@ -141,9 +140,9 @@ final class InputController: NSViewController, TestAPIControllerRoutes {
             }
             var flags: UInt16 = 0
             switch body.action {
-            case "move": flags = 0x0800 // PTRFLAGS_MOVE
+            case "move": flags = 0x0800
             case "down":
-                flags = 0x8000 // PTRFLAGS_DOWN
+                flags = 0x8000
                 switch body.button {
                 case "left": flags |= 0x1000
                 case "right": flags |= 0x2000
