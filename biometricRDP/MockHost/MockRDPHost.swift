@@ -25,6 +25,7 @@ final class MockRDPHost {
     var clipboardText: String = ""
     var clipboardActive: Bool = false
     private let clipboardChannelID: UInt16 = 0x0010
+    private let drivesChannelID: UInt16 = 0x0012
     private var channelJoinHandled = false
     private var demandActiveSent = false
 
@@ -707,6 +708,35 @@ final class MockRDPHost {
 
         if channelID == clipboardChannelID {
             handleClipRDRMessage(channelData)
+        } else if channelID == drivesChannelID {
+            handleRDPDRMessage(channelData)
+        }
+    }
+
+    /// Handle an RDPDR message from the client.
+    private func handleRDPDRMessage(_ data: Data) {
+        guard let header = RDPDR.parseHeader(data) else { return }
+        switch header.packetID {
+        case RDPDR.PAKID_CORE_CLIENT_NAME:
+            // Client sends its name — acknowledge
+            break
+        case RDPDR.PAKID_CORE_CLIENT_CAPABILITY:
+            // Client sends capabilities — send server capability response
+            let serverCap = RDPDR.buildServerCapability()
+            sendVirtualChannel(data: serverCap, channelID: drivesChannelID)
+            // Send client id confirm
+            let clientConfirm = RDPDR.buildClientIDConfirm()
+            sendVirtualChannel(data: clientConfirm, channelID: drivesChannelID)
+        case RDPDR.PAKID_CORE_DEVICELIST_ANNOUNCE:
+            // Client announces a drive — send device list reply
+            // Parse deviceID from payload (offset 4, 4 bytes)
+            guard header.payload.count >= 8 else { return }
+            let deviceID = UInt32(header.payload[4]) | (UInt32(header.payload[5]) << 8) |
+                         (UInt32(header.payload[6]) << 16) | (UInt32(header.payload[7]) << 24)
+            let reply = RDPDR.buildDeviceListReply(deviceID: deviceID, status: 0)
+            sendVirtualChannel(data: reply, channelID: drivesChannelID)
+        default:
+            break
         }
     }
 
@@ -935,6 +965,9 @@ final class MockRDPHost {
                     // until pushAudio() is called explicitly.
                     let formatsMsg = RDPSND.buildFormats()
                     self.sendVirtualChannelNoWait(data: formatsMsg, channelID: 0x0011, conn: conn)
+                    // Send RDPDR server announce to activate the drives channel
+                    let rdpdrAnnounce = RDPDR.buildServerAnnounce()
+                    self.sendVirtualChannelNoWait(data: rdpdrAnnounce, channelID: self.drivesChannelID, conn: conn)
                     return true
                 }
             case .active:

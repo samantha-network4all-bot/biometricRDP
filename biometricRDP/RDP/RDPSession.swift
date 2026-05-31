@@ -36,6 +36,10 @@ final class RDPSession {
     // Virtual channel: rdpsnd (audio)
     let audioChannelID: UInt16 = 0x0011
     var audioMessageHandler: ((Data) -> Void)?
+
+    // Virtual channel: rdpdr (drive/device redirection)
+    let drivesChannelID: UInt16 = 0x0012
+    var drivesMessageHandler: ((Data) -> Void)?
     private var readerActive = false
     private let readerQueue = DispatchQueue(label: "rdp-session-reader")
     private var recvBuffer = Data()
@@ -137,6 +141,9 @@ final class RDPSession {
 
                 // Join virtual channel (rdpsnd audio)
                 try self.sendChannelJoin(self.audioChannelID)
+
+                // Join virtual channel (rdpdr drive redirection)
+                try self.sendChannelJoin(self.drivesChannelID)
 
                 // Send clipboard monitor ready
                 let monitorReady = ClipRDR.buildMonitorReady()
@@ -461,6 +468,9 @@ final class RDPSession {
         }
         if channelID == audioChannelID {
             audioMessageHandler?(channelData)
+        }
+        if channelID == drivesChannelID {
+            drivesMessageHandler?(channelData)
         }
     }
 

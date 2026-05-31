@@ -35,6 +35,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
     private var inputController: InputController?
     private var clipboardController: ClipboardController?
     private var audioController: AudioController?
+    private var drivesController: DrivesController?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -42,6 +43,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
         ensureInputController()
         ensureClipboardController()
         ensureAudioController()
+        ensureDrivesController()
     }
 
     func ensureInputController() {
@@ -63,6 +65,13 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
         let ctrl = AudioController(sessionController: self)
         _ = ctrl.view
         audioController = ctrl
+    }
+
+    func ensureDrivesController() {
+        guard drivesController == nil else { return }
+        let ctrl = DrivesController(sessionController: self)
+        _ = ctrl.view
+        drivesController = ctrl
     }
 
     func registerRoutes(on router: TestAPIRouter) {
@@ -116,6 +125,7 @@ final class SessionController: NSViewController, TestAPIControllerRoutes {
             self.ensureInputController()
             self.ensureClipboardController()
             self.ensureAudioController()
+            self.ensureDrivesController()
             // Wire clipboard handler BEFORE connect so it's ready during handshake
             session.clipboardMessageHandler = { [weak self] channelData in
                 self?.handleClipboardData(channelData)
